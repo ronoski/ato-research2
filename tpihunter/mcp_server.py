@@ -61,6 +61,22 @@ def build_server():
         return session.run_probe(steps)
 
     @server.tool()
+    def register_action(action_id: str, effect: str, requires: list | None = None,
+                        needs_control: bool = False, params: dict | None = None) -> dict:
+        """Extend the alphabet with a flow the target has but the default set lacks — a
+        magic-link login, device pairing, an org invite, a recovery/secondary email. A fix
+        applied to one flow is often missing on a parallel one, so this is how you reach bugs
+        the built-in verbs can't. effect: seed/raise/cred/request. requires: action ids that
+        must run first. needs_control: true if only the inbox/IdP owner can do it. params:
+        inputs beyond the email as {name: template} — a template may use {email} (the shared
+        account), {alias} (a recovery email THIS role controls, a second identifier), or
+        {role}; a plain string is a literal (e.g. a fixed code / invite token). Then use the
+        action in run_probe. Example: register_action("add_alias","seed",requires=["register"],
+        needs_control=True, params={"alias":"{alias}"}) then alias_login likewise."""
+        return session.register_action(action_id, effect, requires=requires,
+                                       needs_control=needs_control, params=params)
+
+    @server.tool()
     def findings() -> dict:
         """The distinct bugs found so far — takeover probes deduplicated by causal
         signature, each with a minimal repro and the laundered proof."""

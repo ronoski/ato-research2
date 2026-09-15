@@ -15,11 +15,11 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + ten self-tests pass:
-`python3 -m unittest discover` (45 tests), and `python3 -m tpihunter.{demo,enum_demo,
+**Baseline (last verified green): 2026-09-15.** Test suite + eleven self-tests pass:
+`python3 -m unittest discover` (51 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo,
-retry_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude
-Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
+retry_demo,alias_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the
+Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
 
@@ -43,6 +43,7 @@ Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
 | **revocation** | `matrix` — mutation × binding-kind × plane lifecycle mode (own-account) | ✅ done (M12; +cross-plane, +factor/lifecycle kinds) |
 | **robustness** | oracle confirmation — a verdict must reproduce before it fires | ✅ done (M13) |
+| **synthesis** | richer params — synthesized actions take codes/tokens/second identifiers | ✅ done (M14) |
 
 ---
 
@@ -245,9 +246,30 @@ one, breaking the load-bearing invariant.
   **zero** cost to the invariant. `retry_demo` shows it: at drop=0.6 a single probe misses
   ~3/24 real takeovers; confirmation recovers all 24 and fires 0 false takeovers on patched.
 - +5 tests (suite 45), 10 demos, import isolation intact (`flaky` is stdlib `random`).
-- **Still open (the sibling robustness item):** a param model richer than email-only for
-  synthesized actions — `enumerator._to_plan` gives a new action only `{"email": …}`, so
-  magic-link codes / invite tokens / second identifiers can't be passed. See *Pick this up next*.
+
+### ✅ M14 — Richer param model for synthesized actions  *(done 2026-09-15, session 4)*
+The sibling robustness item, and the completion of new-action synthesis (M11): the agent could
+*name* a new flow but every step's params were email-only, so a flow needing anything else — a
+code, an invite token, or a SECOND identifier (a recovery/secondary email) — could not be
+*driven*. Now an `ActionSpec` carries declared params and a probe fills them.
+- Files: `enumerator.py` (`ActionSpec.params`, `recovery_alias`, `_render_param`, `_to_plan`
+  fills declared params with `{email}`/`{alias}`/`{role}` templates or literals), `harness.py`
+  (generic dispatch now filters kwargs to what the method accepts, so the implicit `{email}`
+  is dropped for a verb like `add_alias` that takes `alias` not `email`), `mock_target.py`
+  (a recovery-email flow: `add_alias`/`alias_login`, `revoke_aliases` fix control), `agent.py`
+  (`LLMStrategist` parses `params` in `new_actions`; prompt teaches the param grammar),
+  `mcp_tools.py` (`register_action(..., params=...)`; attacker now controls its own recovery
+  email so an alias finding is genuine), `mcp_server.py` (**exposes `register_action` as an MCP
+  tool — it was missing, so the Max-path agent could not extend the alphabet at all**),
+  `alias_demo.py`.
+- The bug it unlocks: on the *patched* target the revoke-on-rebind fix severed the attacker's
+  session + password on SSO but forgot the parallel recovery-email data. An attacker who added
+  their own recovery email *before* the victim's SSO merge still holds a second identifier that
+  resolves to the account → `alias_login` → TPI-1 takeover. Oracle discriminates: with the fix
+  control (`revoke_aliases=True`) the same probe is SAFE. Minimal repro is the full 4-step chain
+  (register → add_alias → sso_login → alias_login) — dropping any step closes it.
+- +6 tests (suite 51), 11 demos, isolation intact. **This clears both robustness items** from
+  *Pick this up next* §3; the now-doable frontier narrows to the W-method oracle and going live.
 
 ---
 
@@ -273,13 +295,12 @@ deferred**, not the next task. In priority order now:
    pure-mock extension (popkey-rebind mint, PIN-change mutation) is low-value vs. running the
    current matrix against something real. On the Grab lens, the matrix already maps to TPI-L1
    (logout/plane), TPI-L2 (reset survival) and T-ATO-22 (factor survives reset).
-3. **Robustness (do-able now against the mock, de-risks any future live adapter):**
-   ✅ oracle confirmation/retry landed (M13) — a verdict must reproduce before it fires.
-   **Remaining:** a param model richer than email-only for synthesized actions (magic-link
-   codes, invites, aliasing) — `enumerator._to_plan` gives a new action only `{"email": …}`,
-   so a flow needing a code / invite token / second identifier can't be driven yet. This is
-   the highest-value now-doable item: it lets the agent's new-action synthesis (M11) reach
-   flows it currently can propose but not fully exercise.
+3. **Robustness (do-able now against the mock, de-risks any future live adapter):** ✅ both
+   items landed. Oracle confirmation/retry (M13) — a verdict must reproduce before it fires.
+   Richer synthesized-action params (M14) — codes / invite tokens / second identifiers, not
+   just email. **Next now-doable candidate here:** oracle retry currently assumes *independent*
+   transient failures (majority vote); a *systematically* misleading target (a stale-identity
+   cache) needs a different signal, not more passes — worth designing when a real target shows it.
 4. **M4 — real `TargetAdapter`** — only if a promoted TPI-L hypothesis genuinely needs a
    bespoke runner the *grab* toolchain can't express; ROE hard-wired (X-Bug-Bounty header,
    own-accounts-only, in-scope allowlist, preflight-gated). The revocation matrix is the
@@ -315,6 +336,22 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 4 (cont) — M14: richer param model for synthesized actions.*
+  Completed the sibling robustness item and, with it, new-action synthesis (M11): the agent
+  could *name* a new flow but every step was email-only, so a flow needing a code, an invite
+  token, or a SECOND identifier (a recovery/secondary email) couldn't be *driven*. Added
+  `ActionSpec.params` (declared `(name, template)` pairs; templates use `{email}`/`{alias}`/
+  `{role}` or a literal), filled by `_to_plan`; the generic harness dispatch now filters kwargs
+  to what the verb accepts, so the implicit `{email}` is dropped for a verb like `add_alias`
+  that takes `alias`. Wired through `register_action` (MCP path) and `LLMStrategist.new_actions`
+  (API path). **Also fixed a real gap:** `mcp_server` never exposed `register_action`, so the
+  Max-subscription agent couldn't extend the alphabet at all despite the README claiming it —
+  now it's an MCP tool. New mock recovery-email flow (`add_alias`/`alias_login`, `revoke_aliases`
+  fix control) + `alias_demo`: on the *patched* target the rebind fix forgot the recovery-email
+  data, so an attacker-added alias survives and laundering lands (TPI-1); the fix control closes
+  it (SAFE), and the minimal repro is the full 4-step chain. +6 tests (suite 51), 11 demos,
+  isolation intact. **This clears both robustness items;** the now-doable frontier is the
+  W-method conformance oracle and going live (M4, owner-gated).
 - **2026-09-15** — *Session 4 — M13: oracle confirmation (robustness).* Picked the first
   roadmap robustness item because M4 is owner-gated and this is what most directly de-risks
   it: the oracle had **no retry**, so on a flaky/rate-limited real target a single transient

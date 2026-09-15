@@ -126,6 +126,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
+| `flaky.py` | `FlakyAdapter` — drops the attacker's reads (seeded); exercises oracle confirmation |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
@@ -135,6 +136,8 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `newaction_demo.py` | the agent registering a new action to find a bug beyond the alphabet |
 | `matrix_demo.py` | the revocation matrix on a 'patched' target — one flow still leaks |
 | `report_demo.py` | hunt the mock, then print the submittable evidence bundle |
+| `retry_demo.py` | oracle confirmation — a flaky target can't flip the verdict (M13) |
+| `alias_demo.py` | richer params — drive a flow that needs a second identifier (M14) |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -243,11 +246,22 @@ In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumer
 The built-in alphabet is a *starting point*, not the whole target. Real auth systems have
 flows it lacks (magic-link login, device pairing, org invites, email aliasing), and a fix
 applied to one flow is often missing on a parallel one. The agent can register a new
-action and probe with it — `register_action(id, effect, requires, needs_control)` on the
-MCP path, or a `new_actions` block in the `LLMStrategist` reply on the API path.
+action and probe with it — `register_action(id, effect, requires, needs_control, params)`
+on the MCP path, or a `new_actions` block in the `LLMStrategist` reply on the API path.
 
 ```
 python3 -m tpihunter.newaction_demo
+```
+
+A synthesized action can take inputs beyond the account email — a code, an invite token, or
+a **second identifier** (a recovery/secondary email) — via declared `params={name: template}`
+(a template may use `{email}`, `{alias}`, `{role}`, or be a literal). `alias_demo` shows the
+payoff: on the *patched* target the revoke-on-rebind fix forgot the recovery-email data, so an
+attacker-added recovery email survives the victim's SSO merge and still resolves to the account
+— a TPI-1 takeover only reachable by a probe that can pass that non-email identifier.
+
+```
+python3 -m tpihunter.alias_demo
 ```
 
 On the *patched* mock, both known laundering flows are fixed — so the fixed alphabet finds
@@ -314,8 +328,9 @@ What's left:
 - **Real `TargetAdapter`** (the frontier): drive an authorized live app — one `httpx`
   client per principal, real flows, a real mailbox channel. The whole stack then runs
   against something real. Blocked on an authorized target.
-- **Robustness for real targets**: adapter rate-limit/backoff, oracle retry on a suspect
-  verdict, a richer param model for synthesized actions (codes, invites, aliasing).
+- **Robustness for real targets**: ✅ oracle confirmation/retry (M13) and a richer param
+  model for synthesized actions — codes, invites, second identifiers (M14). Still to do:
+  adapter rate-limit/backoff for the live path.
 - **W-method conformance oracle**: replace the learner's random-walk equivalence
   check so the learned machine is sound within a bound.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*

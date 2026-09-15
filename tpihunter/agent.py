@@ -103,6 +103,7 @@ class LLMStrategist:
         actions = "\n".join(
             f"  {name}: effect={s.effect.value}, requires={list(s.requires) or 'none'}"
             f"{', needs channel control' if s.needs_control else ''}"
+            f"{f', params={[n for n, _ in s.params]}' if s.params else ''}"
             for name, s in state.specs.items())
         if state.history:
             hist = "\n".join(
@@ -135,11 +136,17 @@ The alphabet is a STARTING point. Real auth systems have flows it lacks — magi
 passwordless login, device pairing, org invites, adding a secondary email, email
 aliasing. If you suspect one exists, declare it as a new action (a fix applied to one
 flow is often missing on a parallel one). effect is one of seed/raise/cred/request;
-set needs_control=true if only the inbox/IdP owner can do it.
+set needs_control=true if only the inbox/IdP owner can do it. If the flow needs an input
+beyond the email — a code, an invite token, or a SECOND identifier (a recovery/secondary
+email you control) — declare it in "params" as {{name: template}}, where a template may use
+{{email}} (the shared account), {{alias}} (a recovery email THIS role controls), or {{role}};
+a plain string is a literal.
 
 Reply with ONLY a JSON object:
-  {{"new_actions": [{{"id":"magic_link","effect":"raise","requires":[],"needs_control":true}}],
-   "probes": [{{"steps": [["attacker","register"], ["victim","magic_link"]]}}]}}
+  {{"new_actions": [{{"id":"add_alias","effect":"seed","requires":["register"],
+                     "needs_control":true,"params":{{"alias":"{{alias}}"}}}}],
+   "probes": [{{"steps": [["attacker","register"], ["attacker","add_alias"],
+                          ["victim","sso_login"], ["attacker","alias_login"]]}}]}}
 new_actions may be omitted. Prefer short probes that seed an attacker binding, then have
 the victim raise trust or change a credential on the same account."""
 
@@ -174,7 +181,8 @@ the victim raise trust or change a credential on the same account."""
                 continue
             requires = tuple(r for r in (a.get("requires") or []) if r in state.specs)
             state.specs[str(aid)] = ActionSpec(str(aid), Effect(effect), requires=requires,
-                                               needs_control=bool(a.get("needs_control")))
+                                               needs_control=bool(a.get("needs_control")),
+                                               params=_parse_new_action_params(a.get("params")))
 
     @staticmethod
     def _extract_json(text: str):
@@ -189,6 +197,19 @@ the victim raise trust or change a credential on the same account."""
                     except Exception:
                         pass
             return []
+
+
+def _parse_new_action_params(params) -> tuple:
+    """Normalize a declared action's params into ((name, template), ...). Accepts a
+    {name: template} object or a list of [name, template] pairs; anything else -> no params.
+    Templates may use {email}/{alias}/{role} (see enumerator._render_param) or be literals."""
+    if isinstance(params, dict):
+        items = params.items()
+    elif isinstance(params, list):
+        items = ((p[0], p[1]) for p in params if isinstance(p, (list, tuple)) and len(p) == 2)
+    else:
+        return ()
+    return tuple((str(n), str(t)) for n, t in items)
 
 
 # --------------------------------------------------------------------------- #

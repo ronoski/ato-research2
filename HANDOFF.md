@@ -12,8 +12,11 @@ The relay so far (what each shift built — see `git log` and the Changelog):
 - **s3** — the Grab engagement lens (offline), and the **revocation matrix** (a whole
   second hunting mode: cross-plane + factor/lifecycle kinds).
 - **s4** — **oracle confirmation** (M13): a verdict must reproduce (strict majority of
-  re-probes) before it fires, so a flaky/rate-limited real target can't flip it — the first
-  robustness item, and the one that most directly de-risks going live.
+  re-probes) before it fires, so a flaky/rate-limited real target can't flip it. Then
+  **richer synthesized-action params** (M14): actions can take codes / invite tokens / a
+  second identifier (a recovery email), not just the account email — completing new-action
+  synthesis and closing both roadmap robustness items. (Also exposed `register_action` on the
+  MCP server, which was missing.)
 
 Your shift, in order: (1) get oriented, (2) review the existing work with a critical eye,
 (3) improve what needs it and continue the roadmap, (4) leave the tree green and hand back
@@ -62,7 +65,7 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 Run the test suite and the ten self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 45 tests: the invariants that must not regress
+python3 -m unittest discover     # 51 tests: the invariants that must not regress
 python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
@@ -73,6 +76,7 @@ python3 -m tpihunter.newaction_demo   # the agent registers a new action to find
 python3 -m tpihunter.matrix_demo      # the revocation matrix: a 'patched' target still leaks via logout
 python3 -m tpihunter.report_demo      # hunt the mock, then print the submittable evidence bundle
 python3 -m tpihunter.retry_demo       # oracle confirmation: a flaky target can't flip the verdict (M13)
+python3 -m tpihunter.alias_demo       # richer params: drive a flow that needs a second identifier (M14)
 ```
 
 Then read, in this order:
@@ -114,7 +118,7 @@ The loop the project implements:
 | `oracle.py` | `AtoOracle` — the **verdict engine** (the star); `confirm=k` re-probes and requires a strict majority so a flaky target can't flip a verdict (M13) |
 | `flaky.py` | `FlakyAdapter` — wraps an adapter and drops the attacker's reads (deterministic under a seed); exercises oracle confirmation without a real target |
 | `mock_target.py` | a deliberately vulnerable in-memory target + adapter, with a `patched` toggle |
-| `harness.py` | `Plan`/`Step` + `run_plan`: probes as data, run with oracle checkpoints |
+| `harness.py` | `Plan`/`Step` + `run_plan`: probes as data, run with oracle checkpoints; generic dispatch filters kwargs to what a synthesized verb accepts (M14) |
 | `probes.py` | hand-written TPI probe plans |
 | `enumerator.py` | **generates** probes — composition-relevant interleavings; takes a `specs` model |
 | `dedup.py` | collapses fired findings to distinct bugs (causal minimization + signature) |
@@ -167,10 +171,14 @@ invitations to improve:
   padding/order variants but keeps different trigger endpoints (e.g. `sso_login` vs a
   synthesized `magic_link`) separate. Still coarse on role/count — if a real target shows a
   false merge, refine the signature; don't just raise the cluster count.
-- **New-action synthesis has an email-only param model.** `register_action` /
-  `LLMStrategist` new_actions let the agent add verbs, but `_to_plan` gives a new action
-  only `{"email": …}` params. Actions needing other inputs (a code, a second identifier for
-  aliasing) need a richer param model — real-target work will hit this.
+- **New-action synthesis now has a real param model (M14).** `ActionSpec.params` carries
+  declared `(name, template)` pairs (`{email}`/`{alias}`/`{role}` or a literal), `_to_plan`
+  fills them, and the harness dispatch drops params a verb doesn't accept. So a synthesized
+  action can take a code, an invite token, or a second identifier (a recovery email). Watch on
+  a real target: `{alias}` is a fixed `role.recovery@evil.example` and the template grammar is
+  deliberately tiny — a flow needing a value derived from an *earlier step's output* (e.g. a
+  code emitted by a request step, not carried by the adapter's inbox side-channel) still isn't
+  expressible; that would need step-scoped params, a bigger change to the `(role, action)` tuple.
 - **`synthesis.py` effect classifier is signature-based** (`OK_VERIFIED`→RAISE,
   `SENT`→REQUEST, session-after-token→CRED). Matches the mock; a real target's outputs
   differ — adapt `SUCCESS_OUTPUTS` / `classify_effect`. `needs_control` is declared, not
@@ -179,11 +187,11 @@ invitations to improve:
   machine can be incomplete for larger alphabets. A W-method / Wp-method conformance oracle
   would make it sound within a bound. *(Still open.)*
 - **Tests are the safety net — extend them with every change.** `tests/test_tpihunter.py`,
-  stdlib `unittest`, **45 tests** covering the load-bearing invariant, the learn→synthesize
+  stdlib `unittest`, **51 tests** covering the load-bearing invariant, the learn→synthesize
   pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`,
-  new-action synthesis, the revocation matrix (cross-plane SPLIT + factor/lifecycle kinds +
-  the expectation model), oracle confirmation under a flaky target (M13), and the report
-  bundle. Add assertions for whatever you build.
+  new-action synthesis + the richer param model (M14), the revocation matrix (cross-plane SPLIT
+  + factor/lifecycle kinds + the expectation model), oracle confirmation under a flaky target
+  (M13), and the report bundle. Add assertions for whatever you build.
 
 ---
 
@@ -198,7 +206,7 @@ invitations to improve:
   (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
   never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
   `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
-- **`unittest discover` (45 tests) and all ten demos stay green.** Don't hand back on red.
+- **`unittest discover` (51 tests) and all eleven demos stay green.** Don't hand back on red.
 
 ---
 
@@ -221,13 +229,14 @@ matrix. From `STATUS.md` → *Pick this up next*:
    mode (own-account, reversible, reads no one else's data), which is precisely why the real
    Grab engagement's cheap wins (TPI-L1/L2) are matrix-shaped. Do not point at anything
    without written authorization; see Scope in `README.md`.
-3. **Robustness** (do-able now against the mock, de-risks M4): ✅ oracle retry landed (M13 —
-   `AtoOracle(confirm=k)`, `flaky.py`, `retry_demo`). **The remaining, highest-value now-doable
-   item** is a richer param model for synthesized actions — currently `_to_plan` gives a new
-   action only `{"email": …}`, so codes / invite tokens / second identifiers can't pass, which
-   caps what the agent's new-action synthesis (M11) can actually drive. This is a strong pick
-   for the next shift while M4 stays owner-gated.
-4. **W-method conformance oracle** for the learner (soundness within a bound).
+3. **Robustness** (do-able now against the mock, de-risks M4): ✅ **both items landed** —
+   oracle confirmation/retry (M13: `AtoOracle(confirm=k)`, `flaky.py`, `retry_demo`) and the
+   richer synthesized-action param model (M14: `ActionSpec.params`, `alias_demo`). Nothing left
+   here that's high-value on the mock alone; the two open follow-ups are the theory-nuance items
+   noted in §4 (systematic-failure oracle signal; step-scoped params) — design them when a real
+   target actually shows the need.
+4. **W-method conformance oracle** for the learner (soundness within a bound) — now the
+   strongest purely-now-doable pick, since both robustness items are done.
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).
@@ -236,7 +245,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all ten demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all eleven demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -253,4 +262,4 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
 - Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
 - `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds → M13 oracle confirmation. Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds → M13 oracle confirmation → M14 richer synthesized-action params. Each shift is one or more commits ending with a `Co-Authored-By` line.

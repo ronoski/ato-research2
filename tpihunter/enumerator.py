@@ -42,6 +42,10 @@ class ActionSpec:
     effect: Effect
     requires: tuple = ()          # action names that must appear earlier in the merged sequence
     needs_control: bool = False   # true if the actor must control the target identifier
+    params: tuple = ()            # extra (name, template) params beyond the implicit {email}:
+                                  # templates may use {email}, {alias}, {role} (see _render_param).
+                                  # Lets a synthesized action carry a code, an invite token, or a
+                                  # SECOND identifier (a recovery/secondary email) — not just email.
 
 
 ACTIONS: dict[str, ActionSpec] = {
@@ -144,6 +148,23 @@ def _insert_checkpoints(steps: list[Step], victim: Principal) -> list[Step]:
     return out
 
 
+def recovery_alias(role: str) -> str:
+    """A recovery/secondary email the given role controls — a *second identifier*, distinct
+    from the shared account email. This is what `{alias}` renders to, so a synthesized action
+    (e.g. adding a recovery email, then logging in via it) can be driven with an identifier
+    that is not the account's primary email."""
+    return f"{role}.recovery@evil.example"
+
+
+def _render_param(tmpl: str, *, email: str, role: str) -> str:
+    """Fill a param template. Placeholders: {email} (the shared account), {alias} (a recovery
+    email this role controls), {role}. A template with no placeholder is used literally — so a
+    strategist can pass a fixed code / invite token."""
+    return (tmpl.replace("{email}", email)
+                .replace("{alias}", recovery_alias(role))
+                .replace("{role}", role))
+
+
 def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
              victim: Principal, email: str, specs: dict[str, ActionSpec]) -> Candidate:
     steps: list[Step] = []
@@ -154,6 +175,8 @@ def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
             params["password"] = "AttackerPw!1" if role == "attacker" else "VictimPw!1"
         if action == "reset_consume":
             params["new_password"] = "AtkReset!9" if role == "attacker" else "VicReset!9"
+        for name, tmpl in specs[action].params:   # synthesized-action params (codes/tokens/aliases)
+            params[name] = _render_param(tmpl, email=email, role=role)
         steps.append(Step(p, action, params))
     mode, clause, why = _classify(merged, specs)
     plan = Plan(name=_name(merged), targets_clause=clause,

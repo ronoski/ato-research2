@@ -14,6 +14,7 @@ Convention: place `arm` right after the victim's identity-establishing action an
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -45,7 +46,15 @@ def execute_action(adapter, principal, action: str, params: dict) -> Observation
     method = getattr(adapter, action, None)
     if method is None:
         return Observation(False, note=f"action '{action}' has no binding on this target")
-    return method(principal, **params)
+    # A synthesized action gets only the params its method actually accepts — the implicit
+    # {email} every step carries is dropped for a verb that doesn't take it (e.g. add_alias
+    # takes `alias`, not `email`), so declared non-email params (codes/tokens/aliases) work.
+    sig = inspect.signature(method)
+    if any(p.kind is p.VAR_KEYWORD for p in sig.parameters.values()):
+        kw = params
+    else:
+        kw = {k: v for k, v in params.items() if k in sig.parameters}
+    return method(principal, **kw)
 
 
 @dataclass

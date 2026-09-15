@@ -397,6 +397,105 @@ class TestNewActionSynthesis(unittest.TestCase):
         self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
 
 
+class TestRicherParams(unittest.TestCase):
+    """Synthesized actions can take params beyond the implicit email — a code, an invite
+    token, or a SECOND identifier (a recovery/secondary email) — so a flow the agent can
+    only *name* under email-only params can now actually be *driven*."""
+
+    ALIAS_ACTIONS = (
+        ("add_alias", "seed", ["register"]),
+        ("alias_login", "raise", ["add_alias"]),
+    )
+    ALIAS_PROBE = [["attacker", "register"], ["attacker", "add_alias"],
+                   ["victim", "sso_login"], ["attacker", "alias_login"]]
+
+    def _session_with_alias(self, target="mock-patched"):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target=target)
+        for aid, eff, req in self.ALIAS_ACTIONS:
+            self.assertTrue(s.register_action(aid, eff, requires=req, needs_control=True,
+                                              params={"alias": "{alias}"})["ok"])
+        return s
+
+    def test_recovery_email_flow_needs_a_second_identifier(self):
+        # on patched, the rebind fix forgot the recovery-email data; only a probe that can
+        # pass the non-email identifier reaches it
+        s = self._session_with_alias()
+        r = s.run_probe(self.ALIAS_PROBE)
+        self.assertEqual(r["severity"], "takeover")
+        self.assertEqual(r["clause_id"], "TPI-1")
+        f = s.findings()
+        self.assertEqual(f["distinct_bugs"], 1)
+        repro = f["bugs"][0]["minimal_repro"]
+        self.assertIn("add_alias", repro)
+        self.assertIn("alias_login", repro)   # the second-identifier login is causal
+
+    def test_oracle_discriminates_when_alias_is_revoked(self):
+        # the fix control: dropping the alias on rebind closes the bug -> SAFE
+        from tpihunter.enumerator import (ActionSpec, Effect, make_candidate, recovery_alias)
+        attacker, victim = _principals()
+        specs = dict(ACTIONS)
+        specs["add_alias"] = ActionSpec("add_alias", Effect.SEED, requires=("register",),
+                                        needs_control=True, params=(("alias", "{alias}"),))
+        specs["alias_login"] = ActionSpec("alias_login", Effect.RAISE, requires=("add_alias",),
+                                          needs_control=True, params=(("alias", "{alias}"),))
+        merged = (("attacker", "register"), ("attacker", "add_alias"),
+                  ("victim", "sso_login"), ("attacker", "alias_login"))
+        control = {victim.name: {EMAIL}, attacker.name: {recovery_alias("attacker")}}
+        effects = {n: sp.effect.value for n, sp in specs.items()}
+        for revoke, expect in ((False, "takeover"), (True, "safe")):
+            a = MockAdapter(patched=True, control=control, revoke_aliases=revoke)
+            cand = make_candidate(merged, attacker, victim, EMAIL, specs)
+            v = run_plan(a, cand.plan, AtoOracle(a, attacker, victim, effects=effects))[0]
+            self.assertEqual(v.severity.value, expect)
+
+    def test_param_template_renders_role_aware_alias(self):
+        # {alias} renders to a recovery email the acting ROLE controls (a distinct identifier)
+        from tpihunter.enumerator import _render_param, recovery_alias
+        self.assertEqual(_render_param("{alias}", email=EMAIL, role="attacker"),
+                         recovery_alias("attacker"))
+        self.assertNotEqual(recovery_alias("attacker"), EMAIL)
+        # {email} and a literal both resolve as expected
+        self.assertEqual(_render_param("{email}", email=EMAIL, role="attacker"), EMAIL)
+        self.assertEqual(_render_param("code-1234", email=EMAIL, role="victim"), "code-1234")
+
+    def test_dispatch_drops_implicit_email_for_verbs_that_reject_it(self):
+        # the generic dispatch filters params to what the method accepts, so a verb taking
+        # `alias` (not `email`) still runs despite every step carrying the implicit {email}
+        from tpihunter.harness import execute_action
+        from tpihunter.enumerator import recovery_alias
+        attacker, _ = _principals()
+        a = MockAdapter(patched=False, control={attacker.name: {recovery_alias("attacker")}})
+        a.register(attacker, EMAIL, "AttackerPw!1")
+        obs = execute_action(a, attacker, "add_alias",
+                             {"email": EMAIL, "alias": recovery_alias("attacker")})
+        self.assertTrue(obs.ok)   # did not raise TypeError on the surplus email kwarg
+
+    def test_register_action_rejects_malformed_params(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession()
+        self.assertFalse(s.register_action("x", "seed", params=12345)["ok"])   # not a mapping/list
+
+    def test_api_strategist_synthesizes_action_with_params(self):
+        # the API path: the model declares an action WITH a non-email param and a probe using it
+        from tpihunter.enumerator import recovery_alias
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}, attacker.name: {recovery_alias("attacker")}}
+        reply = json.dumps({
+            "new_actions": [
+                {"id": "add_alias", "effect": "seed", "requires": ["register"],
+                 "needs_control": True, "params": {"alias": "{alias}"}},
+                {"id": "alias_login", "effect": "raise", "requires": ["add_alias"],
+                 "needs_control": True, "params": {"alias": "{alias}"}},
+            ],
+            "probes": [{"steps": self.ALIAS_PROBE}],
+        })
+        hunter = AgentHunter(lambda: MockAdapter(patched=True, control=control),
+                             attacker, victim, EMAIL, budget=20)
+        res = hunter.hunt(LLMStrategist(lambda _p: reply, max_rounds=1))
+        self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
+
+
 class TestRevocationMatrix(unittest.TestCase):
     def _factory(self, patched, revokes, **kw):
         owner = Principal("owner")

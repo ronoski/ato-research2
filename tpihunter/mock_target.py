@@ -28,13 +28,21 @@ class _Account:
         self.marker: Optional[str] = None        # the private resource that holds a canary
         self.sessions: set[str] = set()
         self.factors: set[str] = set()           # enrolled 2nd-factor ids (passkey/biometric)
+        self.aliases: set[str] = set()           # recovery/secondary emails that resolve here
 
 
 class VulnerableTarget:
     def __init__(self, patched: bool = False, revokes: Optional[set] = None,
                  planes: Optional[tuple] = None, plane_local: Optional[set] = None,
-                 mutation_planes: Optional[dict] = None, revoke_factors: Optional[set] = None) -> None:
+                 mutation_planes: Optional[dict] = None, revoke_factors: Optional[set] = None,
+                 revoke_aliases: bool = False) -> None:
         self.patched = patched
+        # Whether the revoke-on-rebind fix (patched sso_login) ALSO drops recovery emails an
+        # attacker added before the rebind. Default False models the common gap: the fix
+        # revoked sessions/password but forgot the parallel recovery-email data, so an
+        # attacker-added alias survives and still resolves to the account (a second-identifier
+        # laundering only reachable if a probe can pass that non-email identifier).
+        self.revoke_aliases = revoke_aliases
         # Which credential-mutating transitions actually revoke predating sessions.
         # This is the revocation-matrix substrate: real systems fix one flow and forget
         # a parallel one (e.g. a reset revokes but a plane-local logout does not). Empty
@@ -147,8 +155,32 @@ class VulnerableTarget:
                 self.sessions.pop(tok, None)
             acc.sessions.clear()
             acc.password = None
+            if self.revoke_aliases:
+                # the complete fix also drops recovery emails added under the old (unproven)
+                # binding; by default it does NOT — the attacker's alias survives the rebind.
+                for a in list(acc.aliases):
+                    self.by_email.pop(a, None)
+                acc.aliases.clear()
         acc.email_verified = True      # the victim's IdP proof upgrades the row
         return self._issue(acc.id), acc.id
+
+    def add_alias(self, token: Optional[str], alias: str) -> Optional[str]:
+        """Add a recovery/secondary email to the acting session's account. The bug: it is not
+        re-validated on a later rebind, so it can outlive the binding that created it."""
+        acc = self.account_of(token)
+        if acc is None:
+            return None
+        acc.aliases.add(alias)
+        self.by_email[alias] = acc.id     # the alias now resolves to this account
+        return acc.id
+
+    def alias_login(self, alias: str) -> tuple[Optional[str], Optional[str]]:
+        """Log in via a recovery email. Succeeds only if `alias` is a registered recovery
+        email of some account (else it does not create one), so a finding is genuine."""
+        aid = self.by_email.get(alias)
+        if aid is None or alias not in self.accounts[aid].aliases:
+            return None, None
+        return self._issue(aid), aid
 
     def magic_link(self, email: str) -> tuple[str, str]:
         # A passwordless email login: proving inbox control also verifies the row.
@@ -212,10 +244,10 @@ class MockAdapter:
     def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None,
                  revokes: Optional[set] = None, planes: Optional[tuple] = None,
                  plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None,
-                 revoke_factors: Optional[set] = None) -> None:
+                 revoke_factors: Optional[set] = None, revoke_aliases: bool = False) -> None:
         self.t = VulnerableTarget(patched=patched, revokes=revokes, planes=planes,
                                   plane_local=plane_local, mutation_planes=mutation_planes,
-                                  revoke_factors=revoke_factors)
+                                  revoke_factors=revoke_factors, revoke_aliases=revoke_aliases)
         self.inbox = InMemoryInbox()
         self.factor_of: dict[str, Optional[str]] = {}   # principal -> its most-recent factor id
         self.sess: dict[str, Optional[str]] = {}     # principal name -> session token
@@ -262,6 +294,27 @@ class MockAdapter:
         proof = ProofEvent(p, Identifier("email", email), Channel.EMAIL)
         return Observation(True, identity=aid, proof=proof,
                            note=f"{p} logged in via magic link; row now 'verified'")
+
+    def add_alias(self, p: Principal, alias: str) -> Observation:
+        # Add a recovery email to the acting session's account. Needs control of the alias
+        # (you prove the recovery inbox), so the finding is not an all-permissive artifact.
+        if not self._controls(p, alias):
+            return Observation(False, note=f"{p} does not control the recovery email {alias}")
+        aid = self.t.add_alias(self.sess.get(p.name), alias)
+        return Observation(aid is not None, identity=aid,
+                           note=f"{p} added {alias} as a recovery email on the account")
+
+    def alias_login(self, p: Principal, alias: str) -> Observation:
+        # Log in via a recovery email the actor controls. Resolves to whatever account the
+        # alias is registered on — the takeover vector when an attacker's alias survives a rebind.
+        if not self._controls(p, alias):
+            return Observation(False, note=f"{p} cannot read the {alias} inbox")
+        tok, aid = self.t.alias_login(alias)
+        if tok:
+            self.sess[p.name] = tok
+        proof = ProofEvent(p, Identifier("email", alias), Channel.EMAIL) if tok else None
+        return Observation(tok is not None, identity=aid, proof=proof,
+                           note=f"{p} logged in via the recovery email {alias}")
 
     def reset_request(self, p: Principal, email: str) -> Observation:
         tok = self.t.reset_request(email)

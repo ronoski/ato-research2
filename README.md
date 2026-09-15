@@ -19,7 +19,7 @@ This repo has two halves:
 ## Quickstart
 
 ```bash
-python3 -m unittest discover     # regression suite (45 tests, stdlib only)
+python3 -m unittest discover     # regression suite (51 tests, stdlib only)
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo  # automata learning: recovers the target's auth state machine (L*)
@@ -29,6 +29,7 @@ python3 -m tpihunter.newaction_demo  # the agent registers a new action to find 
 python3 -m tpihunter.matrix_demo # the revocation matrix: a 'patched' target still leaks via a parallel flow
 python3 -m tpihunter.report_demo # turn the findings into a submittable evidence bundle
 python3 -m tpihunter.retry_demo  # oracle confirmation: a flaky target can't flip the verdict
+python3 -m tpihunter.alias_demo  # richer params: the agent drives a flow needing a second identifier
 ```
 
 The core is stdlib-only; no `pip install`. Two optional integrations bring their own

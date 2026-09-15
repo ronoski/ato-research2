@@ -22,7 +22,7 @@ from typing import Optional
 
 from .clauses import CLAUSES
 from .dedup import deduplicate
-from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate
+from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate, recovery_alias
 from .harness import run_plan
 from .matrix import RevocationMatrix, default_mints, default_mutations
 from .mock_target import MockAdapter
@@ -39,6 +39,21 @@ _TARGETS = {
 }
 
 
+def _parse_params(params) -> tuple[tuple, Optional[str]]:
+    """Normalize a synthesized action's params into an ordered ((name, template), ...) tuple.
+    Accepts {name: template} or a list of [name, template] pairs; templates are strings."""
+    if not params:
+        return (), None
+    items = params.items() if isinstance(params, dict) else params
+    out = []
+    try:
+        for name, tmpl in items:
+            out.append((str(name), str(tmpl)))
+    except (TypeError, ValueError):
+        return (), "params must be {name: template} or a list of [name, template] pairs"
+    return tuple(out), None
+
+
 class HuntSession:
     """One hunting session against a target. Holds the accumulated findings so the
     agent can call run_probe repeatedly and then ask for the distinct bugs."""
@@ -48,7 +63,11 @@ class HuntSession:
         self.attacker = Principal("attacker")
         self.victim = Principal("victim")
         self.email = email
-        self.control = {self.victim.name: {self.email}}   # victim controls the inbox/IdP
+        # victim controls the shared inbox/IdP; the attacker controls only their OWN recovery
+        # email (a second identifier), never the shared account — so an alias-based finding is
+        # genuine, not an artifact of an all-permissive channel model.
+        self.control = {self.victim.name: {self.email},
+                        self.attacker.name: {recovery_alias("attacker")}}
         # oracle confirmation passes: 0 for the deterministic mock; raise against a flaky
         # real target so a takeover must reproduce across passes before it is reported.
         self.confirm = confirm
@@ -75,14 +94,20 @@ class HuntSession:
         return MockAdapter(control=control, **self._cfg)
 
     def register_action(self, action_id: str, effect: str,
-                        requires: Optional[list] = None, needs_control: bool = False) -> dict:
+                        requires: Optional[list] = None, needs_control: bool = False,
+                        params: Optional[dict] = None) -> dict:
         """Extend the alphabet with a flow the target has but the default set lacks —
         e.g. a magic-link login, device pairing, an org invite, an email alias.
 
         effect: one of seed/raise/cred/request. requires: action ids that must run first.
         needs_control: true if only the channel-controlling principal (victim) can do it.
+        params: extra inputs the flow needs beyond the implicit email, as {name: template}.
+        A template may use {email} (the shared account), {alias} (a recovery/secondary email
+        THIS role controls — a second identifier), or {role}; a plain string is a literal
+        (e.g. a fixed code / invite token). This is what lets a synthesized action be driven
+        with a code, an invite token, or an identifier that is not the account's email.
         The action then works in run_probe; on this mock it *executes* only if the target
-        implements it (e.g. "magic_link"), otherwise it composes but no-ops."""
+        implements it (e.g. "magic_link", "add_alias", "alias_login"), else it no-ops."""
         valid = {e.value for e in Effect}
         if effect not in valid:
             return {"ok": False, "error": f"effect must be one of {sorted(valid)}"}
@@ -90,9 +115,13 @@ class HuntSession:
         for r in requires:
             if r not in self.specs:
                 return {"ok": False, "error": f"requires unknown action '{r}'"}
-        self.specs[action_id] = ActionSpec(action_id, Effect(effect),
-                                           requires=requires, needs_control=bool(needs_control))
+        pspec, perr = _parse_params(params)
+        if perr:
+            return {"ok": False, "error": perr}
+        self.specs[action_id] = ActionSpec(action_id, Effect(effect), requires=requires,
+                                           needs_control=bool(needs_control), params=pspec)
         return {"ok": True, "action": action_id, "effect": effect,
+                "params": [n for n, _ in pspec],
                 "note": "registered; use it in run_probe like any other action"}
 
     # -- read tools -----------------------------------------------------------
@@ -137,10 +166,17 @@ class HuntSession:
                 "Call findings() to get the distinct bugs (deduplicated, with minimal repro).",
             ],
             "extending_the_alphabet": (
-                "register_action(action_id, effect, requires=[], needs_control=bool). "
-                "effect: seed (establishes a binding), raise (verifies/raises trust), cred "
-                "(changes a credential), request (creates an outstanding token). Set "
-                "needs_control=true if only the inbox/IdP owner can do it."
+                "register_action(action_id, effect, requires=[], needs_control=bool, "
+                "params={}). effect: seed (establishes a binding), raise (verifies/raises "
+                "trust), cred (changes a credential), request (creates an outstanding token). "
+                "Set needs_control=true if only the inbox/IdP owner can do it. Some flows need "
+                "more than the email — a code, an invite token, or a SECOND identifier (a "
+                "recovery/secondary email you control): declare them in params={name: "
+                "template}, where a template may use {email} (the shared account), {alias} (a "
+                "recovery email THIS role controls), or {role}, and a plain string is a "
+                "literal. E.g. add_alias with params={'alias':'{alias}'} adds a recovery email "
+                "you control, then alias_login (params={'alias':'{alias}'}) logs in via it — "
+                "a takeover if that alias outlived the victim's rebind."
             ),
             "target": self.target,
         }
