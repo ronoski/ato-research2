@@ -85,6 +85,14 @@ SURVIVED verdict can't be a broken-check artifact. Drive it from the agent with 
 `revocation_matrix()` tool; a SURVIVED cell renders as a submittable report via
 `report.revocation_report`.
 
+**Cross-plane (the subtle one).** A credential is checked on several *verify-point planes*
+(route surfaces owned by different teams), and revocation can be per-plane state. So each
+cell is measured **on every plane**. A mutation that revokes on the plane it was issued on
+but leaves the credential alive on another surfaces as a **SPLIT** — the bug a same-plane
+test calls fixed. The `mock-plane-split` target models it: `logout` revokes only its `mts`
+plane while the binding lives on `auth`. This is the exact shape of the open cross-plane
+cell on a real engagement (a plane-local logout, the token still valid on another plane).
+
 ## Files
 
 | file | role |

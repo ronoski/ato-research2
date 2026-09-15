@@ -16,7 +16,7 @@ target is an LLM strategist that adapts. Judge every task by: *does it move us t
 live agent driving the loop?*
 
 **Baseline (last verified green): 2026-09-15.** Test suite + nine self-tests pass:
-`python3 -m unittest discover` (36 tests), and `python3 -m tpihunter.{demo,enum_demo,
+`python3 -m unittest discover` (39 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo}`
 (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 `python3 -m tpihunter.mcp_server` (needs `mcp`).
@@ -41,7 +41,7 @@ learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matr
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
-| **revocation** | `matrix` — mutation × predating-binding lifecycle mode (own-account) | ✅ done (M12) |
+| **revocation** | `matrix` — mutation × predating-binding lifecycle mode, per-plane (own-account) | ✅ done (M12, +cross-plane) |
 
 ---
 
@@ -188,7 +188,14 @@ computable form of the matrix that proved valuable on the real Grab engagement.
 - Why it matters: on the *patched* mock the fix propagated to the reset flow but **not** the
   parallel logout flow — the matrix shows one red cell in a green column, Composition-
   Blindness made visible. Each cell carries its own positive + negative control, so SURVIVED
-  is never a broken-check artifact. +5 tests (suite 36), 9 demos.
+  is never a broken-check artifact.
+- ⭐ **Cross-plane axis (added same session).** Each cell is now measured **per verify-point
+  plane**, so a mutation that revokes on the plane it is issued on but leaves the credential
+  alive on another surfaces as a **SPLIT** — the subtle bug a same-plane test calls fixed.
+  New target `mock-plane-split` (logout revokes only its `mts` plane; the binding lives on
+  `auth`) — the exact shape of the open Grab cell T-ATO-05. The mock grew a plane model
+  (`planes`/`plane_local`, per-plane `present_binding`); `HuntSession` targets became config
+  dicts. +8 tests total (suite 39), 9 demos.
 
 ### ✅ M11 — New-action synthesis (agent extends its own alphabet)  *(done 2026-09-15)*
 The agent proposes *new* actions for flows the fixed alphabet lacks — the biggest lever
@@ -237,11 +244,10 @@ deferred**, not the next task. In priority order now:
    one). If the owner promotes a TPI-L composition cell (e.g. TPI-L1 logout-propagation),
    help turn it into a house-format `hunts/G<n>/HYPOTHESIS.md` — through *their*
    `tools/hunt.py preflight` gate; **no firing without the owner's OK; filing is theirs.**
-2. **Extend the revocation matrix (M12) toward real engagements.** The mock proves the
-   machinery; the value is more mint/mutation kinds — factor-enroll and popkey-rebind as
-   mints, and cross-*plane* re-presentation (does a binding survive a mutation on a
-   *different* API plane?), which is the exact open cell in the Grab lens (T-ATO-05).
-   Also: a `revokes`-varied mock target so the matrix has richer non-uniformity to find.
+2. **Extend the revocation matrix (M12) toward real engagements.** Cross-plane is done
+   (SPLIT, `mock-plane-split`). Remaining value: more mint/mutation *kinds* — factor-enroll
+   and popkey-rebind as mints, PIN-change and email-change as mutations — so the grid spans
+   the whole credential lifecycle, not just session logout/reset.
 3. **Robustness (do-able now against the mock, de-risks any future live adapter):**
    oracle retry on a suspect verdict, and a param model richer than email-only for
    synthesized actions (magic-link codes, invites, aliasing).
@@ -280,6 +286,16 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M12 cross-plane axis.** Extended the revocation
+  matrix to measure each cell **per verify-point plane**. A mutation that revokes on the
+  plane it is issued on but leaves the credential alive on another now surfaces as a
+  **SPLIT** (`Survival.SPLIT`) — the subtle cross-plane bug a same-plane test calls fixed.
+  New mock plane model (`planes`/`plane_local`/`mutation_planes`, per-plane `present_binding`,
+  `planes()`); new target `mock-plane-split` (logout revokes only its `mts` plane, binding
+  lives on `auth`) — the exact shape of the open Grab cell T-ATO-05. `HuntSession` targets
+  became config dicts (`_adapter` helper). Report + demo are SPLIT-aware. +3 tests (suite 39),
+  9 demos, isolation intact. **Next: more mint/mutation kinds** (factor-enroll, PIN/email
+  change) so the grid spans the whole credential lifecycle.
 - **2026-09-15** — *Session 3 (cont).* **M12: revocation matrix — a second hunting mode.**
   Deepest addition since the agent loop. The real-engagement work showed the crown jewel is
   the mutation × predating-binding matrix (does transition M revoke binding B?), which lived

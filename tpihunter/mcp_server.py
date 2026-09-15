@@ -86,8 +86,9 @@ def build_server():
 
     @server.tool()
     def reset(target: str = "mock-vulnerable") -> dict:
-        """Start a fresh hunt session. target: "mock-vulnerable" or "mock-patched"
-        (use the patched one to confirm a bug closes under the fix)."""
+        """Start a fresh hunt session. target: "mock-vulnerable", "mock-patched" (confirm a
+        bug closes under the fix), or "mock-plane-split" (a multi-plane estate where logout
+        revokes only its own plane — revocation_matrix() shows a cross-plane SPLIT)."""
         return session.reset(target)
 
     return server

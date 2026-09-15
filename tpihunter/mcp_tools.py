@@ -29,7 +29,14 @@ from .mock_target import MockAdapter
 from .oracle import AtoOracle
 from .types import Principal
 
-_TARGETS = {"mock-vulnerable": False, "mock-patched": True}
+# Target name -> MockAdapter kwargs. "mock-plane-split" models a multi-plane estate where
+# logout revokes only the plane it is issued on — the cross-plane laundering (Grab T-ATO-05).
+_TARGETS = {
+    "mock-vulnerable": {"patched": False},
+    "mock-patched": {"patched": True},
+    "mock-plane-split": {"patched": True, "planes": ("auth", "mts"),
+                         "revokes": {"logout"}, "plane_local": {"logout"}},
+}
 
 
 class HuntSession:
@@ -50,13 +57,19 @@ class HuntSession:
             return {"ok": False, "error": f"unknown target '{target}'",
                     "targets": list(_TARGETS)}
         self.target = target
-        self.patched = _TARGETS[target]
+        self._cfg = dict(_TARGETS[target])          # MockAdapter kwargs for this target
+        self.patched = self._cfg.get("patched", False)
         self.specs = dict(ACTIONS)     # a private copy — register_action never mutates the global
         self._fired: list = []
         self._fired_keys: set = set()
         self.probes_run = 0
-        return {"ok": True, "target": target,
-                "note": "session reset; attacker does NOT control the email, victim does"}
+        return {"ok": True, "target": target, "targets": list(_TARGETS),
+                "note": "session reset; attacker does NOT control the email, victim does. "
+                        "Targets: mock-vulnerable, mock-patched, mock-plane-split (the last "
+                        "shows a cross-plane SPLIT in revocation_matrix())."}
+
+    def _adapter(self, control):
+        return MockAdapter(control=control, **self._cfg)
 
     def register_action(self, action_id: str, effect: str,
                         requires: Optional[list] = None, needs_control: bool = False) -> dict:
@@ -112,9 +125,12 @@ class HuntSession:
                 "There is a second, single-principal mode: revocation_matrix(). It asks, for "
                 "each way of minting a session and each credential-mutating transition, "
                 "whether the mutation revokes a session minted BEFORE it. A SURVIVED cell is "
-                "a stolen session that outlives the owner's logout/reset (TPI-4). It is "
-                "own-account and reversible — the safe mode to reach for first on a real, "
-                "authorized target where reading another principal's data is not permitted.",
+                "a stolen session that outlives the owner's logout/reset (TPI-4); a SPLIT cell "
+                "means the mutation revoked the credential on the plane it was issued on but "
+                "NOT on another verify-point plane — the subtle cross-plane bug a same-plane "
+                "test would call fixed. It is own-account and reversible — the safe mode to "
+                "reach for first on a real, authorized target where reading another "
+                "principal's data is not permitted. (reset('mock-plane-split') to see a SPLIT.)",
                 "Call findings() to get the distinct bugs (deduplicated, with minimal repro).",
             ],
             "extending_the_alphabet": (
@@ -138,7 +154,7 @@ class HuntSession:
         if err:
             return {"ok": False, "error": err}
         cand = make_candidate(merged, self.attacker, self.victim, self.email, self.specs)
-        adapter = MockAdapter(patched=self.patched, control=self.control)
+        adapter = self._adapter(self.control)
         verdict, trace = run_plan(adapter, cand.plan,
                                   AtoOracle(adapter, self.attacker, self.victim, effects=self._effects()))
         self.probes_run += 1
@@ -179,7 +195,7 @@ class HuntSession:
         control = {owner.name: {email}}
 
         def factory():
-            return MockAdapter(patched=self.patched, control=control)
+            return self._adapter(control)
 
         matrix = RevocationMatrix(owner, default_mints(email), default_mutations(email))
         results = matrix.run(factory)
@@ -230,7 +246,7 @@ class HuntSession:
 
     # -- internals ------------------------------------------------------------
     def _run_pair(self, plan):
-        a = MockAdapter(patched=self.patched, control=self.control)
+        a = self._adapter(self.control)
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=self._effects()))
 
     def _verdict(self, plan):

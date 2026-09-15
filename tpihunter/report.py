@@ -124,8 +124,12 @@ class Report:
         L.append("")
         L.append("## Evidence — why this is a confirmed takeover")
         if self.evidence:
-            L.append("A unique canary secret was planted in the victim's private "
-                     "resource; the attacker context then:")
+            if self.mode == "revocation":
+                L.append("The captured credential was checked before and after the mutation, "
+                         "with a positive and a negative control on each plane:")
+            else:
+                L.append("A unique canary secret was planted in the victim's private "
+                         "resource; the attacker context then:")
             for e in self.evidence:
                 L.append(f"- **[{e['strength']}] {e['kind']}** — {e['detail']}")
         else:

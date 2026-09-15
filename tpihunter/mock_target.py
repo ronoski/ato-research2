@@ -30,16 +30,27 @@ class _Account:
 
 
 class VulnerableTarget:
-    def __init__(self, patched: bool = False, revokes: Optional[set] = None) -> None:
+    def __init__(self, patched: bool = False, revokes: Optional[set] = None,
+                 planes: Optional[tuple] = None, plane_local: Optional[set] = None,
+                 mutation_planes: Optional[dict] = None) -> None:
         self.patched = patched
         # Which credential-mutating transitions actually revoke predating sessions.
         # This is the revocation-matrix substrate: real systems fix one flow and forget
         # a parallel one (e.g. a reset revokes but a plane-local logout does not). Empty
         # default => logout leaves captured tokens alive (a T-ATO-05-shaped latent bug).
         self.revokes: set = set(revokes or ())
+        # Verify-point planes: a credential is checked on several route surfaces owned by
+        # different lineages. Revocation may be per-plane state (Grab T-ATO-05). Default is
+        # one plane, so the estate behaves globally and legacy behaviour is unchanged.
+        self.planes: tuple = tuple(planes) if planes else ("default",)
+        # Mutations that revoke ONLY the plane they are issued on (a plane-local logout
+        # clears client state on its own plane while the token lives on the others).
+        self.plane_local: set = set(plane_local or ())
+        self.mutation_planes: dict = dict(mutation_planes or {"logout": "mts", "reset_consume": "auth"})
         self.accounts: dict[str, _Account] = {}
         self.by_email: dict[str, str] = {}
-        self.sessions: dict[str, str] = {}        # token -> account_id
+        self.sessions: dict[str, str] = {}        # token -> account_id (global bookkeeping)
+        self.plane_sessions: dict[str, set] = {p: set() for p in self.planes}  # per-plane validity
         self.reset_tokens: dict[str, tuple[str, str]] = {}   # token -> (account_id, email_at_request)
         self._n = 0
 
@@ -51,7 +62,22 @@ class VulnerableTarget:
         tok = secrets.token_hex(8)
         self.sessions[tok] = aid
         self.accounts[aid].sessions.add(tok)
+        for p in self.planes:                     # a fresh session authenticates everywhere
+            self.plane_sessions[p].add(tok)
         return tok
+
+    def _issuing_plane(self, action: str) -> str:
+        p = self.mutation_planes.get(action)
+        return p if p in self.planes else self.planes[0]
+
+    def _revoke_global(self, token: str, acc: "_Account") -> None:
+        self.sessions.pop(token, None)
+        acc.sessions.discard(token)
+        for p in self.planes:
+            self.plane_sessions[p].discard(token)
+
+    def token_valid_on_plane(self, token: Optional[str], plane: str) -> bool:
+        return bool(token) and token in self.plane_sessions.get(plane, set())
 
     def _get_or_create(self, email: str) -> _Account:
         aid = self.by_email.get(email)
@@ -114,24 +140,29 @@ class VulnerableTarget:
         acc = self.accounts[aid]
         if self.patched or "reset_consume" in self.revokes:
             # TPI-4 session-kill-on-credential-change: a reset invalidates every
-            # session whose provenance predates it.
+            # session whose provenance predates it. A credential change revokes
+            # globally (not plane-local) unless configured otherwise.
             for tok in list(acc.sessions):
-                self.sessions.pop(tok, None)
-            acc.sessions.clear()
+                if "reset_consume" in self.plane_local:
+                    self.plane_sessions[self._issuing_plane("reset_consume")].discard(tok)
+                else:
+                    self._revoke_global(tok, acc)
         acc.password = new_password
         return self._issue(aid), aid
 
     def logout(self, token: Optional[str]) -> bool:
-        """End a session. Whether it actually revokes the *credential* (removes the
-        token server-side) depends on `revokes` — a plane-local logout that only clears
-        client state leaves the token alive, which is the laundering the matrix hunts."""
+        """End a session. Whether it revokes the *credential* (removes the token
+        server-side), and on WHICH planes, depends on `revokes` / `plane_local` — a
+        plane-local logout clears its own plane while the token lives on the others, the
+        cross-plane laundering the matrix hunts (Grab T-ATO-05)."""
         if not token:
             return False
         acc = self.account_of(token)
-        if "logout" in self.revokes:
-            self.sessions.pop(token, None)
-            if acc:
-                acc.sessions.discard(token)
+        if "logout" in self.revokes and acc is not None:
+            if "logout" in self.plane_local:
+                self.plane_sessions[self._issuing_plane("logout")].discard(token)
+            else:
+                self._revoke_global(token, acc)
         return acc is not None
 
     def account_of(self, token: Optional[str]) -> Optional[_Account]:
@@ -143,8 +174,10 @@ class MockAdapter:
     """Binds the alphabet Sigma to the mock, keeping one session per principal."""
 
     def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None,
-                 revokes: Optional[set] = None) -> None:
-        self.t = VulnerableTarget(patched=patched, revokes=revokes)
+                 revokes: Optional[set] = None, planes: Optional[tuple] = None,
+                 plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None) -> None:
+        self.t = VulnerableTarget(patched=patched, revokes=revokes, planes=planes,
+                                  plane_local=plane_local, mutation_planes=mutation_planes)
         self.inbox = InMemoryInbox()
         self.sess: dict[str, Optional[str]] = {}     # principal name -> session token
         # Who genuinely controls which identifier (IdP account / inbox). Channel-proof
@@ -228,11 +261,21 @@ class MockAdapter:
         whether a mutation revokes it."""
         return self.sess.get(p.name)
 
-    def present_binding(self, handle: Optional[str]) -> Observation:
-        """Present a previously-captured credential directly (not via a principal's live
-        session) and report whether it still authenticates, and to what identity."""
+    def planes(self) -> tuple:
+        """The verify-point planes this target exposes. Revocation may be per-plane, so
+        a binding must be checked on each — a mutation that revokes on one plane may
+        leave the credential alive on another."""
+        return self.t.planes
+
+    def present_binding(self, handle: Optional[str], plane: Optional[str] = None) -> Observation:
+        """Present a previously-captured credential and report whether it still
+        authenticates — on a specific `plane` when given (the cross-plane survival
+        question), else globally."""
         acc = self.t.account_of(handle)
-        return Observation(acc is not None, identity=(acc.email if acc else None))
+        if plane is None:
+            return Observation(acc is not None, identity=(acc.email if acc else None))
+        valid = self.t.token_valid_on_plane(handle, plane) and acc is not None
+        return Observation(valid, identity=(acc.email if valid else None))
 
     def plant_marker(self, p: Principal, value: str) -> Observation:
         acc = self.t.account_of(self.sess.get(p.name))

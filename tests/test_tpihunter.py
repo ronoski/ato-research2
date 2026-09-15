@@ -366,7 +366,7 @@ class TestRevocationMatrix(unittest.TestCase):
         control = {owner.name: {"owner@corp.example"}}
 
         class BrokenAdapter(MockAdapter):
-            def present_binding(self, handle):
+            def present_binding(self, handle, plane=None):
                 from tpihunter.types import Observation
                 return Observation(True, identity="owner@corp.example")  # accepts everything
 
@@ -381,6 +381,38 @@ class TestRevocationMatrix(unittest.TestCase):
         m = HuntSession(target="mock-patched").revocation_matrix()
         self.assertEqual(m["laundering_cells"], 2)
         self.assertIn("SURVIVED", m["rendered"])
+
+    def test_cross_plane_split_is_detected(self):
+        # logout revokes only the plane it is issued on; the binding lives on another
+        from tpihunter.matrix import Survival
+        owner, matrix = self._matrix()
+        factory = lambda: MockAdapter(patched=True, control={owner.name: {"owner@corp.example"}},
+                                      planes=("auth", "mts"), revokes={"logout"},
+                                      plane_local={"logout"})
+        results = matrix.run(factory)
+        cell = results[("password_session", "logout")]
+        self.assertEqual(cell.survival, Survival.SPLIT)
+        self.assertEqual(cell.per_plane["mts"], Survival.REVOKED)
+        self.assertEqual(cell.per_plane["auth"], Survival.SURVIVED)
+        self.assertEqual(cell.clause_id, "TPI-4")
+        # a SPLIT is a finding, and the reset column is still clean (global revoke)
+        self.assertTrue(cell.is_finding)
+        self.assertEqual(results[("password_session", "password_reset")].survival, Survival.REVOKED)
+
+    def test_plane_split_target_via_huntsession(self):
+        from tpihunter.mcp_tools import HuntSession
+        m = HuntSession(target="mock-plane-split").revocation_matrix()
+        self.assertEqual(m["laundering_cells"], 2)
+        self.assertIn("SPLIT", m["rendered"])
+        self.assertIn("plane-local", m["findings"][0]["note"])
+
+    def test_global_revocation_across_planes_is_clean(self):
+        from tpihunter.matrix import Survival
+        owner, matrix = self._matrix()
+        factory = lambda: MockAdapter(patched=True, control={owner.name: {"owner@corp.example"}},
+                                      planes=("auth", "mts"), revokes={"logout"})  # not plane_local
+        results = matrix.run(factory)
+        self.assertTrue(all(v.survival is Survival.REVOKED for v in results.values()))
 
     def test_survived_cell_renders_as_report(self):
         from tpihunter.matrix import RevocationMatrix, default_mints, default_mutations

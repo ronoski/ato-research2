@@ -40,8 +40,10 @@ _NEVER_VALID = "__never_valid_binding_handle__"
 
 
 class Survival(str, Enum):
-    REVOKED = "revoked"          # good: the mutation killed the predating binding
-    SURVIVED = "survived"        # bad: TPI-4 laundering — the binding outlived the mutation
+    REVOKED = "revoked"          # good: the mutation killed the predating binding on every plane
+    SURVIVED = "survived"        # bad: TPI-4 laundering — the binding outlived the mutation everywhere
+    SPLIT = "split"              # bad: revoked on some planes, survived on others — plane-local
+                                 #      revocation, the subtle cross-plane bug a same-plane test misses
     INCONCLUSIVE = "inconclusive"  # a control failed; the cell measured nothing
 
 
@@ -70,10 +72,11 @@ class CellVerdict:
     clause_id: Optional[str]
     evidence: list = field(default_factory=list)
     note: str = ""
+    per_plane: dict = field(default_factory=dict)   # plane -> Survival (REVOKED/SURVIVED)
 
     @property
     def is_finding(self) -> bool:
-        return self.survival is Survival.SURVIVED
+        return self.survival in (Survival.SURVIVED, Survival.SPLIT)
 
 
 # --------------------------------------------------------------------------- #
@@ -100,45 +103,67 @@ def default_mutations(email: str) -> list[MutationSpec]:
 
 def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: MutationSpec,
              principal: Principal) -> CellVerdict:
-    """Measure one (mint, mutation) cell with in-cell positive and negative controls."""
+    """Measure one (mint, mutation) cell, per plane, with in-cell positive and negative
+    controls on each plane. The credential is checked on every verify-point plane after
+    the mutation, so a plane-local revocation (revoked where the mutation was issued,
+    alive elsewhere) surfaces as a SPLIT rather than hiding behind a same-plane test."""
     a = adapter_factory()
+    planes = list(a.planes()) if hasattr(a, "planes") else [None]
+
+    def inconclusive(note):
+        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None, note=note)
 
     # 1. mint the binding and capture a durable handle to it
     for action, params in mint.steps:
         execute_action(a, principal, action, params)
     handle = a.capture_binding(principal)
     if not handle:
-        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None,
-                           note=f"mint '{mint.id}' established no binding")
+        return inconclusive(f"mint '{mint.id}' established no binding")
 
-    # 2. POSITIVE control — the binding authenticates before the mutation
-    before = a.present_binding(handle)
-    if not before.ok:
-        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None,
-                           note="captured binding did not authenticate before the mutation")
-
-    # 3. NEGATIVE control — a never-valid handle is rejected (the check discriminates)
-    if a.present_binding(_NEVER_VALID).ok:
-        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None,
-                           note="present_binding accepts a never-valid handle — cannot read a survival")
+    # 2/3. per-plane controls — B authenticates before M, a never-valid handle does not
+    readable = []
+    for plane in planes:
+        if a.present_binding(handle, plane).ok and not a.present_binding(_NEVER_VALID, plane).ok:
+            readable.append(plane)
+    if not readable:
+        return inconclusive("no plane had both a firing positive control and a rejecting "
+                            "negative control — cannot read a survival")
 
     # 4. perform the mutation as the account owner
     for action, params in mutation.steps:
         execute_action(a, principal, action, params)
 
-    # 5. re-present the captured binding
-    after = a.present_binding(handle)
-    if after.ok:
-        ev = [f"binding minted by '{mint.id}' still authenticates as {after.identity} "
-              f"after '{mutation.id}'",
-              "positive control: it authenticated before the mutation",
-              "negative control: a never-valid handle was rejected"]
+    # 5. re-present the captured binding on each readable plane
+    per_plane = {p: (Survival.SURVIVED if a.present_binding(handle, p).ok else Survival.REVOKED)
+                 for p in readable}
+    survived = [p for p, s in per_plane.items() if s is Survival.SURVIVED]
+    revoked = [p for p, s in per_plane.items() if s is Survival.REVOKED]
+
+    def names(ps):
+        return ", ".join(str(p) for p in ps)
+
+    if survived and revoked:
+        ev = [f"binding minted by '{mint.id}' was REVOKED on plane(s) [{names(revoked)}] "
+              f"but SURVIVED on [{names(survived)}] after '{mutation.id}'",
+              "the mutation's revocation is plane-local — a same-plane test would call this fixed",
+              "per-plane positive and negative controls held on every plane read"]
+        return CellVerdict(mint.id, mutation.id, Survival.SPLIT, 0.95, "TPI-4", ev,
+                           note=f"'{mutation.label or mutation.id}' revoked the "
+                                f"'{mint.label or mint.id}' binding on [{names(revoked)}] but not "
+                                f"[{names(survived)}] — plane-local revocation",
+                           per_plane=per_plane)
+    if survived:
+        ev = [f"binding minted by '{mint.id}' still authenticates after '{mutation.id}' "
+              f"on plane(s) [{names(survived)}]",
+              "per-plane positive control fired and the negative control was rejected"]
         return CellVerdict(mint.id, mutation.id, Survival.SURVIVED, 0.95, "TPI-4", ev,
                            note=f"'{mutation.label or mutation.id}' did not revoke the "
-                                f"'{mint.label or mint.id}' binding")
+                                f"'{mint.label or mint.id}' binding",
+                           per_plane=per_plane)
     return CellVerdict(mint.id, mutation.id, Survival.REVOKED, 0.95, None,
                        note=f"'{mutation.label or mutation.id}' revoked the "
-                            f"'{mint.label or mint.id}' binding")
+                            f"'{mint.label or mint.id}' binding",
+                       per_plane=per_plane)
 
 
 @dataclass
@@ -160,7 +185,7 @@ class RevocationMatrix:
     def render(self, results: dict) -> str:
         """A text grid: mutations as columns, mints as rows."""
         sym = {Survival.REVOKED: "revoked ", Survival.SURVIVED: "SURVIVED",
-               Survival.INCONCLUSIVE: "  --    "}
+               Survival.SPLIT: "SPLIT ⚠", Survival.INCONCLUSIVE: "  --    "}
         w = max([len(m.id) for m in self.mints] + [8])
         head = " " * (w + 2) + "  ".join(f"{x.id:^14}" for x in self.mutations)
         lines = [head, " " * (w + 2) + "  ".join("-" * 14 for _ in self.mutations)]

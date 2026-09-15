@@ -19,27 +19,27 @@ from .mock_target import MockAdapter
 from .types import Principal
 
 
-def _run(label: str, patched: bool, revokes: set) -> None:
+def _run(label: str, **cfg) -> None:
     owner = Principal("owner")
     email = "owner@corp.example"
     control = {owner.name: {email}}
 
     def factory():
-        return MockAdapter(patched=patched, control=control, revokes=revokes)
+        return MockAdapter(control=control, **cfg)
 
     matrix = RevocationMatrix(owner, default_mints(email), default_mutations(email))
     results = matrix.run(factory)
     findings = matrix.findings(results)
 
     print(f"\n {label}")
-    print(" " + "-" * 60)
+    print(" " + "-" * 62)
     print(matrix.render(results))
     if findings:
         print(f"\n  {len(findings)} laundering cell(s) — a binding outlived a mutation that should kill it:")
         for v in findings:
             print(f"   [{v.clause_id}] {v.note}")
     else:
-        print("\n  no laundering: every mint is revoked by every mutation.")
+        print("\n  no laundering: every mint is revoked by every mutation, on every plane.")
 
 
 def main() -> None:
@@ -47,15 +47,21 @@ def main() -> None:
     print(" question per cell: does the mutation revoke a binding minted before it?")
 
     _run("TARGET: mock-patched  (pre-hijacking bugs fixed — but is the fix uniform?)",
-         patched=True, revokes=set())
-    _run("TARGET: fully patched (revoke-on-mutation enforced on every flow)",
-         patched=True, revokes={"logout"})
+         patched=True)
+    _run("TARGET: mock-plane-split  (multi-plane estate — logout revokes only its own plane)",
+         patched=True, planes=("auth", "mts"), revokes={"logout"}, plane_local={"logout"})
+    _run("TARGET: fully patched (revoke-on-mutation enforced on every flow, every plane)",
+         patched=True, planes=("auth", "mts"), revokes={"logout"})
 
-    print("\n " + "=" * 60)
-    print(" The first grid finds SURVIVED cells on a 'patched' target: the reset flow")
-    print(" revokes, the parallel logout flow does not. The second grid — with logout")
-    print(" revocation added — is clean. Same discriminating discipline as the oracle:")
-    print(" a matrix that was red on both would be worthless.\n")
+    print("\n " + "=" * 62)
+    print(" Grid 1: on a 'patched' single-plane target the reset flow revokes but the")
+    print("         parallel logout flow does not — SURVIVED.")
+    print(" Grid 2: ⭐ the subtle one. logout DOES revoke — but only on the plane it is")
+    print("         issued on ('mts'); the credential lives on 'auth' — a SPLIT. A")
+    print("         same-plane test would have called this fixed. This is the exact shape")
+    print("         of the open cross-plane cell on the real engagement (Grab T-ATO-05).")
+    print(" Grid 3: logout revokes globally — clean. A matrix red on every target would")
+    print("         be worthless; the discipline is that a fix shows as green.\n")
 
 
 if __name__ == "__main__":
