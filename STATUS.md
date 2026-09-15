@@ -239,6 +239,15 @@ Small open: **W-method conformance oracle** for the learner (soundness within a 
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *End of shift — handing to the third contributor.* The mock loop is
+  complete end-to-end (M0–M11): theory → oracle → two-principal adapter → learner →
+  synthesis → enumerator → dedup → agent control loop → live via the API strategist *and*
+  the Claude Code agent on the owner's Max subscription (MCP) → agent extends its own
+  alphabet. 27 tests + 7 demos green; nothing half-done. **Next session: read
+  [`HANDOFF.md`](HANDOFF.md) first, then start M4 — a real `TargetAdapter`** (the one
+  milestone blocked on an authorized target from the owner; ask for one). Everything else
+  is polish (M7 evidence bundle) or robustness (adapter backoff, oracle retry, richer
+  synthesized-action params). HANDOFF.md was refreshed to current state for a fresh reader.
 - **2026-09-15** — *Session 3 (cont).* **M11 done: new-action synthesis.** The agent can
   now register actions the fixed alphabet lacks — `HuntSession.register_action` (MCP path)
   and `LLMStrategist` parsing `new_actions` (API path). Generalized the stack to support

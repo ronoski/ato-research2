@@ -1,11 +1,13 @@
 # HANDOFF — start here
 
-You are the next session taking over this project. The previous session has paused.
-**We work as a relay: one session at a time, never concurrently.** Your shift, in
-order: (1) get oriented, (2) review the existing work with a critical eye, (3)
-improve what needs it and continue the roadmap, (4) leave the tree green and hand
-back cleanly. You have a real mandate to **review and refactor**, not just append —
-but read the *Decisions log* in `STATUS.md` before reopening a settled trade-off.
+You are the next session taking over this project — the **third contributor** (the relay
+so far: person 1 built the theory + core oracle/adapter/learner; person 2 built dedup, the
+agent control loop, both live strategists, and new-action synthesis; you are person 3).
+The previous session has paused. **We work as a relay: one session at a time, never
+concurrently.** Your shift, in order: (1) get oriented, (2) review the existing work with a
+critical eye, (3) improve what needs it and continue the roadmap, (4) leave the tree green
+and hand back cleanly. You have a real mandate to **review and refactor**, not just append
+— but read the *Decisions log* in `STATUS.md` before reopening a settled trade-off.
 
 ---
 
@@ -29,9 +31,11 @@ principals (attacker + victim) through the auth flows, (2) detects when the atta
 gains access only the victim should have, and (3) reports each finding with a verdict,
 a minimal repro, and the exact TPI clause violated.
 
-Today the loop, the dedup, and the **agent control seam** are built and
-**self-validating against a mock**. The remaining work is to wire a real model into the
-strategist (M9), connect it to real targets (M4), and report findings (M7).
+Today the full loop is built and **self-validating against a mock**: oracle, dedup, the
+agent control seam, a live strategist both via the API (M9) and via the Claude Code agent
+on the owner's Max subscription (M10, the MCP server), and the agent extending its own
+alphabet (M11). The remaining frontier is **real targets** (M4) and **shareable reports**
+(M7).
 
 **Read the theory first:** open `paper/provenance.html` in a browser. It defines the
 invariant, the three failure modes (gap / forgery / laundering), the
@@ -43,14 +47,17 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 
 ## 2. Get oriented in five minutes
 
-Run the test suite and the four self-tests — the fastest way to see what exists:
+Run the test suite and the seven self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 9 tests: the invariants that must not regress
-python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
-python3 -m tpihunter.enum_demo   # the enumerator: generates probes, rediscovers TPI-1 and finds TPI-4
-python3 -m tpihunter.learn_demo  # automata learning: L* recovers the mock's auth state machine
-python3 -m tpihunter.synth_demo  # the closed loop: learn → synthesize action model → enumerate
+python3 -m unittest discover     # 27 tests: the invariants that must not regress
+python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
+python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
+python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
+python3 -m tpihunter.synth_demo   # the closed loop: learn → synthesize action model → enumerate
+python3 -m tpihunter.agent_demo   # agent as hunter: a strategist drives the loop (enumerator vs LLM seam)
+python3 -m tpihunter.live_agent_demo  # the real LLM strategist (gated by TPIHUNTER_LIVE=1; else prints setup)
+python3 -m tpihunter.newaction_demo   # the agent registers a new action to find a bug beyond the alphabet
 ```
 
 Then read, in this order:
@@ -61,10 +68,12 @@ Then read, in this order:
 4. **the code**, in dependency order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
    `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
-   `dedup.py` → `sul.py` → `learner.py` → `synthesis.py` → `agent.py`
+   `dedup.py` → `sul.py` → `learner.py` → `synthesis.py` → `agent.py` →
+   `mcp_tools.py` → `mcp_server.py` → `llm.py`
 
-   `agent.py` is where it all comes together for the goal — read it last but treat it
-   as the top of the design: everything else is a tool the agent (strategist) drives.
+   `agent.py` (and `mcp_tools.py`, its MCP twin) is where it all comes together for the
+   goal — read them last but treat them as the top of the design: everything else is a
+   tool the agent (strategist) drives.
 
 ---
 
@@ -115,39 +124,38 @@ The loop the project implements:
 
 ## 4. Review this critically — where I'd look first
 
-I (the previous session) am flagging the spots most worth your scrutiny. Treat these
-as invitations to improve:
+The previous contributors flag the spots most worth your scrutiny. Treat these as
+invitations to improve:
 
-- **Oracle `_diagnose` is heuristic** (rules over trace shape). It can mislabel the
-  clause on unusual interleavings. A white-box corroboration hook, or a more
-  principled mapping, would strengthen it.
-- **The oracle's confluence handling is subtle.** In pre-hijacking the attacker
-  resolves to the victim's identity *from the seeding step*, so confluence pre-exists
-  the "attack". The grading treats confluence as decisive at assess-time regardless —
-  convince yourself this is sound, and that it can't false-positive on a legitimately
-  shared/tenant account.
-- **Enumerator over-generation is now handled by `dedup.py`** (M5): 106 findings →
-  2 distinct bugs via causal minimization + a `(clause, effect-set)` signature. The
-  one thing to watch: the signature is deliberately coarse (drops role/count), so two
-  genuinely different bugs sharing a clause *and* effect-set would merge. Fine on the
-  mock; if a real target shows a false merge, make the signature finer — don't just
-  raise the cluster count.
-- **The mock is a simplification.** Its bugs and patches are illustrative. The
-  reset-token / inbox model in `mock_target.py` is slightly quirky (stale links after
-  consume) — verify it doesn't create phantom states in the learner. **If you add a
-  new bug to the mock, add its patch too**, or you break the load-bearing invariant
-  (below).
-- **L\* uses a random-walk equivalence oracle** — realistic for a black box, but the
-  learned machine can be incomplete for larger alphabets. A W-method / Wp-method
-  conformance oracle would make it sound within a bound. *(Still open.)*
-- **`tests/` now exists** (`tests/test_tpihunter.py`, stdlib `unittest`, 9 tests) and
-  codifies the load-bearing invariant + the learn→synthesize pipeline. *Extend it
-  when you add behaviour* — e.g. M5 should assert "~2 distinct findings on the mock".
+- **Everything is validated only against the mock.** The single biggest risk: the mock's
+  vocabulary and behaviour are simple and clean; a real target (M4) is noisy, has a larger
+  output alphabet, and rate-limits. Most items below are really "this is tuned to the mock;
+  re-check it on a real target."
+- **The oracle is the load-bearing component — audit it first.** `_diagnose` is now
+  effect-based (`AtoOracle(effects=…)`, so new verbs classify), with the old name heuristic
+  as a fallback; the *grading* (`_grade`) treats an identity-confluence as a decisive
+  takeover. Convince yourself confluence can't false-positive on a legitimately shared /
+  tenant / SSO-org account on a real target. The oracle has **no retry** — a flaky real
+  target could flip a verdict; a suspect→retry loop is on the roadmap.
+- **Dedup signature is `(clause, effect-set, trigger-verbs)`** (`dedup.py`). It merges
+  padding/order variants but keeps different trigger endpoints (e.g. `sso_login` vs a
+  synthesized `magic_link`) separate. Still coarse on role/count — if a real target shows a
+  false merge, refine the signature; don't just raise the cluster count.
+- **New-action synthesis has an email-only param model.** `register_action` /
+  `LLMStrategist` new_actions let the agent add verbs, but `_to_plan` gives a new action
+  only `{"email": …}` params. Actions needing other inputs (a code, a second identifier for
+  aliasing) need a richer param model — real-target work will hit this.
 - **`synthesis.py` effect classifier is signature-based** (`OK_VERIFIED`→RAISE,
-  `SENT`→REQUEST, session-after-token→CRED). It matches the mock exactly, but a real
-  target's output vocabulary will differ — the mapping in `SUCCESS_OUTPUTS` /
-  `classify_effect` is where you adapt it, and `needs_control` is declared, not
+  `SENT`→REQUEST, session-after-token→CRED). Matches the mock; a real target's outputs
+  differ — adapt `SUCCESS_OUTPUTS` / `classify_effect`. `needs_control` is declared, not
   learned (single-account traces always control the identifier).
+- **L\* uses a random-walk equivalence oracle** — fine for a black box, but the learned
+  machine can be incomplete for larger alphabets. A W-method / Wp-method conformance oracle
+  would make it sound within a bound. *(Still open.)*
+- **Tests are the safety net — extend them with every change.** `tests/test_tpihunter.py`,
+  stdlib `unittest`, **27 tests** covering the load-bearing invariant, the learn→synthesize
+  pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`, and
+  new-action synthesis. Add assertions for whatever you build.
 
 ---
 
@@ -158,9 +166,11 @@ as invitations to improve:
   WARNING as a build failure.
 - **Keep it runnable and self-validating.** Every capability ships with a demo that
   proves it on the mock, and a test that asserts it.
-- **Stdlib-only** unless there is a strong reason (a real HTTP adapter will want
-  `httpx` — that's fine; isolate it so the core stays dependency-free).
-- **`unittest discover` and all five demos stay green.** Don't hand back on red.
+- **Core stays stdlib-only; isolate every optional dep.** Two exist so far — `anthropic`
+  (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
+  never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
+  `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
+- **`unittest discover` and all seven demos stay green.** Don't hand back on red.
 
 ---
 
@@ -191,7 +201,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all five demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all seven demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -206,5 +216,6 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 - Repo: `/home/ron/ato-research2` → https://github.com/ronoski/ato-research2 (private, `main`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
-- Python 3, stdlib only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete (synthesis + tests). Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
+- `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis. Each shift is one or more commits ending with a `Co-Authored-By` line.
