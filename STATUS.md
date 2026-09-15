@@ -205,20 +205,25 @@ on the owner's **Claude Max 20x subscription** instead of pay-per-token API bill
 
 North star is **agent as hunter** — reachable on the owner's **Max subscription** via the
 MCP server (M10), the agent extends its own alphabet (M11), and findings render as
-submittable reports (M7). The whole mock loop is complete end-to-end; the frontier is
-**real targets**. In priority order:
+submittable reports (M7). The whole mock loop is complete end-to-end.
 
-1. **M4 — real `TargetAdapter`.** The big one: implement `TargetAdapter` (and, for the
-   MCP path, a real-target `HuntSession`) against an authorized live app — one `httpx`
-   client per principal, real flows, a real mailbox channel. Then the whole stack (MCP
-   agent on Max, new-action synthesis, learner, dedup, report) runs against something real.
-   **Blocked on an authorized target from the owner** — see Scope in `README.md`; ask for
-   one. Everything downstream reuses the injected-execution pattern unchanged.
-2. **Robustness for real targets** (do-able now, de-risks M4): rate-limit/backoff in the
-   adapter, non-determinism handling in the oracle (retry a suspect verdict), and a param
-   model richer than email-only for synthesized actions (needed for magic-link codes, org
-   invites, aliasing).
-3. **W-method conformance oracle** for the learner (soundness within a bound).
+⭐ **Course correction (2026-09-15):** the real engagement (`~/singularity/grab`, an
+authorized Grab HackerOne ATO campaign) is being pursued via an **offline TPI lens**
+(`~/singularity/grab/ato/TPI_LENS.md`), not a live `TargetAdapter` — its ROE forbids
+scripted account creation and its toolchain out-classes the mock plumbing. So **M4 is
+deferred**, not the next task. In priority order now:
+
+1. **Iterate the TPI lens on the real engagement** (offline, in the *grab* repo, not this
+   one). If the owner promotes a TPI-L composition cell (e.g. TPI-L1 logout-propagation),
+   help turn it into a house-format `hunts/G<n>/HYPOTHESIS.md` — through *their*
+   `tools/hunt.py preflight` gate; **no firing without the owner's OK; filing is theirs.**
+2. **Robustness (do-able now against the mock, de-risks any future live adapter):**
+   oracle retry on a suspect verdict, and a param model richer than email-only for
+   synthesized actions (magic-link codes, invites, aliasing).
+3. **M4 — real `TargetAdapter`** — only if a promoted TPI-L hypothesis genuinely needs a
+   bespoke two-principal runner the *grab* toolchain can't express; ROE hard-wired
+   (X-Bug-Bounty header, own-accounts-only, in-scope allowlist, preflight-gated).
+4. **W-method conformance oracle** for the learner (soundness within a bound).
 
 ---
 
@@ -249,6 +254,20 @@ submittable reports (M7). The whole mock loop is complete end-to-end; the fronti
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M4 redirected — TPI as an offline lens over a real
+  engagement, not a live adapter.** Owner named the real target: an active, authorized Grab
+  HackerOne engagement at `~/singularity/grab` (separate repo, mature ATO model — 90 threat
+  statements, its own preflight/rig toolchain). Chose (via AskUserQuestion) the offline
+  *lens* integration over building a live `TargetAdapter`, because (a) that engagement's ROE
+  forbids scripted account creation — which TPI-Hunter's `register` does — and (b) its
+  toolchain already out-classes the mock plumbing. Deliverable: `~/singularity/grab/ato/
+  TPI_LENS.md` — maps the TPI clause catalog onto their T-ATO rows (compression), builds the
+  mutation×predating-binding **composition matrix**, and ranks the open composition cells
+  (TPI-L1 logout-propagation is the cheap reversible keystone). **No live requests sent;
+  nothing filed.** Honest finding: their model already embodies composition thinking; TPI's
+  add is the unifying invariant + the coverage matrix, not new mechanism. *Implication for
+  this repo:* M4 (live adapter) is **deferred, not the next task** — the lens is the chosen
+  vehicle; only build a bespoke ROE-enforced runner if a promoted TPI-L hypothesis needs one.
 - **2026-09-15** — *Session 3 (third contributor).* **M7 done: evidence bundle.** Added
   `report.py` — turns each distinct bug (dedup `Cluster`) into a submittable report by
   re-running its minimal repro to capture the full `Trace`+`Verdict`, then rendering steps
