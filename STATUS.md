@@ -15,11 +15,11 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + six self-tests pass:
-`python3 -m unittest discover` (23 tests), and
-`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo,agent_demo,live_agent_demo}`
-(the live one is gated behind `TPIHUNTER_LIVE=1`; without it, it prints setup and exits).
-The MCP server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
+**Baseline (last verified green): 2026-09-15.** Test suite + seven self-tests pass:
+`python3 -m unittest discover` (27 tests), and `python3 -m tpihunter.{demo,enum_demo,
+learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo}` (the live one is gated
+behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
+`python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
 
@@ -160,6 +160,21 @@ Recast probe generation as a pluggable **strategy** so an agent can drive the lo
 - Accept: live wiring test (fake client → `complete_fn` → `LLMStrategist` →
   `AgentHunter`) finds both bugs in 2 probes; defaults assert Opus + adaptive thinking.
 
+### ✅ M11 — New-action synthesis (agent extends its own alphabet)  *(done 2026-09-15)*
+The agent proposes *new* actions for flows the fixed alphabet lacks — the biggest lever
+for finding bugs an enumerator never could.
+- Files: `mcp_tools.py` (`register_action`), `agent.py` (`LLMStrategist` parses
+  `new_actions`), `newaction_demo.py`; supporting generalizations in `oracle.py`
+  (effect-based diagnosis so new verbs classify), `harness.py` (generic dispatch:
+  `adapter.<action>(principal, **params)`), `dedup.py` (trigger-aware signature so a bug
+  via a new verb is a distinct finding), `mock_target.py` (a real `magic_link` flow).
+- Demo story: on `mock-patched` both known laundering flows are fixed, so the fixed
+  alphabet finds nothing — but the fix was applied to SSO and NOT the parallel
+  passwordless `magic_link` flow. The agent registers `magic_link` and finds it (TPI-1).
+- Registration never mutates the global `ACTIONS`; new verbs execute only if the target
+  implements them (else they compose but no-op, flagged as `unbound_actions`).
+- +4 tests (suite 27), 7 demos green.
+
 ### ✅ M10 — Claude-Code / Max-subscription strategist  *(done 2026-09-15)*
 **The Opus agent in the Claude Code CLI** is now a supported strategist, so hunting runs
 on the owner's **Claude Max 20x subscription** instead of pay-per-token API billing.
@@ -178,19 +193,20 @@ on the owner's **Claude Max 20x subscription** instead of pay-per-token API bill
 
 ## Pick this up next
 
-North star is **agent as hunter** — now reachable on the owner's **Max subscription** via
-the MCP server (M10). The loop is complete end-to-end on the mock; the frontier is richer
-hypotheses and real targets. In priority order:
+North star is **agent as hunter** — reachable on the owner's **Max subscription** via the
+MCP server (M10), and the agent can now extend its own alphabet (M11). The mock loop is
+complete; the frontier is **real targets**. In priority order:
 
-1. **New-action synthesis** — let the strategist propose *new* `ActionSpec`s for
-   target-specific flows the fixed alphabet lacks (magic links, device pairing, org
-   invites, email aliasing/plus-addressing). Biggest lever for finding bugs an enumerator
-   never could. Extend `HuntSession`/`briefing` so the agent can register a new action
-   (id + effect + requires + needs_control) and probe with it.
-2. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner; then
-   point `HuntSession` and the learner (`sul.py`) at it — where the MCP hunt goes live.
-3. **M7 — evidence bundle.** Turn each `findings()` bug into a shareable report
-   (markdown/JSON) with the full repro trace + canary evidence.
+1. **M4 — real `TargetAdapter`.** The big one: implement `TargetAdapter` (and, for the
+   MCP path, a real-target `HuntSession`) against an authorized live app — one `httpx`
+   client per principal, real flows, a real mailbox channel. Then the whole stack (MCP
+   agent on Max, new-action synthesis, learner, dedup) runs against something real.
+   **Blocked on an authorized target from the owner** — see Scope in `README.md`.
+2. **M7 — evidence bundle.** Turn each `findings()` bug into a shareable report
+   (markdown/JSON) with the full repro trace + canary evidence — the agent's report step.
+3. **Robustness for real targets:** rate-limit/backoff in the adapter, non-determinism
+   handling in the oracle (retry a suspect verdict), and a param model richer than
+   email-only for synthesized actions.
 
 Small open: **W-method conformance oracle** for the learner (soundness within a bound).
 
@@ -223,6 +239,15 @@ Small open: **W-method conformance oracle** for the learner (soundness within a 
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M11 done: new-action synthesis.** The agent can
+  now register actions the fixed alphabet lacks — `HuntSession.register_action` (MCP path)
+  and `LLMStrategist` parsing `new_actions` (API path). Generalized the stack to support
+  it: effect-based oracle diagnosis (new verbs classify), generic harness dispatch,
+  trigger-aware dedup signature (a bug via a new verb is a *distinct* finding), and a real
+  `magic_link` flow in the mock that the *patched* target forgot to fix. `newaction_demo`
+  shows the payoff: patched target, fixed alphabet finds 0 bugs; the agent hypothesizes
+  `magic_link` and finds a TPI-1 laundering an enumerator never could. +4 tests (27), 7
+  demos. **Next: M4 — real `TargetAdapter`** (blocked on an authorized target).
 - **2026-09-15** — *Session 3 (cont).* **M10 done: Claude-Code / Max-subscription
   strategist.** Added `mcp_tools.py` (`HuntSession` — the hunt loop as agent-drivable
   tools: `briefing`/`list_actions`/`run_probe`/`findings`/`reset`; stdlib, tested) and

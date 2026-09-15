@@ -56,10 +56,15 @@ class Verdict:
 
 
 class AtoOracle:
-    def __init__(self, adapter, attacker: Principal, victim: Principal) -> None:
+    def __init__(self, adapter, attacker: Principal, victim: Principal,
+                 effects: Optional[dict] = None) -> None:
         self.a = adapter
         self.attacker = attacker
         self.victim = victim
+        # action -> effect-class name ("seed"/"raise"/"cred"/"request"). When given,
+        # diagnosis is effect-based, so newly-synthesized actions classify correctly;
+        # when None, it falls back to the built-in action-name heuristic.
+        self.effects = effects
         self._canary = secrets.token_hex(16)   # 128-bit ground-truth secret
         self._victim_id: Optional[str] = None
         self._victim_ref: Optional[str] = None
@@ -138,10 +143,20 @@ class AtoOracle:
         v_steps = trace.by_principal(self.victim)
         v_actions = [s.action for s in v_steps]
 
-        seeded = any(x in a_actions for x in ("register", "login"))
-        victim_raise = any(x in v_actions for x in ("sso_login", "email_change_confirm"))
-        victim_cred = "reset_consume" in v_actions
-        attacker_cred = "reset_consume" in a_actions
+        if self.effects is not None:
+            # effect-based: generalizes to any action, including synthesized ones
+            def has(actions, eff):
+                return any(self.effects.get(a) == eff for a in actions)
+            seeded = has(a_actions, "seed")
+            victim_raise = has(v_actions, "raise")
+            victim_cred = has(v_actions, "cred")
+            attacker_cred = has(a_actions, "cred")
+        else:
+            # fallback: the built-in alphabet by name
+            seeded = any(x in a_actions for x in ("register", "login"))
+            victim_raise = any(x in v_actions for x in ("sso_login", "email_change_confirm"))
+            victim_cred = "reset_consume" in v_actions
+            attacker_cred = "reset_consume" in a_actions
 
         def victim_proof() -> Optional[str]:
             return next((str(s.obs.proof) for s in v_steps if s.obs and s.obs.proof), None)

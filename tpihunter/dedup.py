@@ -89,10 +89,16 @@ def _signature(min_merged: list, specs: dict[str, ActionSpec], clause_id: Option
       * count and order are exploitation detail, not bug identity.
 
     So "attacker seeds, victim raises" is one TPI-1 bug however it interleaves, and a
-    session surviving a reset is one TPI-4 bug whoever requested the reset. The
-    minimal repro kept on the cluster shows one concrete path."""
-    effects = frozenset(specs[action].effect.value for _role, action in min_merged)
-    return (clause_id, effects)
+    session surviving a reset is one TPI-4 bug whoever requested the reset.
+
+    The one endpoint distinction kept: the *trigger* actions (effect raise/cred — the
+    laundering step), so a bug via `sso_login` and one via a synthesized `magic_link`
+    are separate findings (different flows to fix), while padding/order variants of each
+    still merge. The minimal repro kept on the cluster shows one concrete path."""
+    effects = frozenset(specs[a].effect.value for _role, a in min_merged)
+    triggers = frozenset(a for _role, a in min_merged
+                         if specs[a].effect.value in ("raise", "cred"))
+    return (clause_id, effects, triggers)
 
 
 def deduplicate(cands: list[Candidate], attacker: Principal, victim: Principal,

@@ -25,6 +25,7 @@ python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups t
 python3 -m tpihunter.learn_demo  # automata learning: recovers the target's auth state machine (L*)
 python3 -m tpihunter.synth_demo  # the closed loop: learn → synthesize action model → enumerate
 python3 -m tpihunter.agent_demo  # agent as hunter: a strategist drives the loop (enumerator vs LLM seam)
+python3 -m tpihunter.newaction_demo  # the agent registers a new action to find a bug beyond the alphabet
 ```
 
 The core is stdlib-only; no `pip install`. Two optional integrations bring their own
@@ -47,8 +48,11 @@ Then in any Claude Code session:
 > Use the tpihunter tools to hunt the mock target. Read the briefing first.
 
 Claude Code reads `briefing()` / `list_actions()`, proposes probes via `run_probe(steps)`,
-adapts to the verdicts, and reports the distinct bugs via `findings()` — no API key. (For
-CI / headless runs there's also an API strategist; see the [tool README](tpihunter/README.md).)
+adapts to the verdicts, and reports the distinct bugs via `findings()` — no API key. It can
+also `register_action(...)` to hypothesize a flow the alphabet lacks (magic-link, device
+pairing, org invite, email alias) and probe with it — how it finds bugs a fixed enumerator
+never could. (For CI / headless runs there's also an API strategist; see the
+[tool README](tpihunter/README.md).)
 
 ## Working on this project?
 

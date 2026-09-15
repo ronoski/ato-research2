@@ -19,7 +19,7 @@ from typing import Optional
 
 from .adapter import Trace
 from .oracle import AtoOracle, Verdict
-from .types import Principal
+from .types import Observation, Principal
 
 # alphabet action -> how to invoke it on the adapter with a step's params
 _DISPATCH = {
@@ -58,7 +58,17 @@ def run_plan(adapter, plan: Plan, oracle: AtoOracle) -> tuple[Verdict, Trace]:
         elif s.action == "assess":
             verdict = oracle.assess(trace)
         else:
-            obs = _DISPATCH[s.action](adapter, s.principal, s.params)
+            fn = _DISPATCH.get(s.action)
+            if fn is not None:
+                obs = fn(adapter, s.principal, s.params)
+            else:
+                # a synthesized action: execute it generically via the adapter's method
+                # of the same name (adapter.<action>(principal, **params)).
+                method = getattr(adapter, s.action, None)
+                if method is None:
+                    obs = Observation(False, note=f"action '{s.action}' has no binding on this target")
+                else:
+                    obs = method(s.principal, **s.params)
             trace.record(s.principal, s.action, s.params, obs)
     assert verdict is not None, "plan must contain an 'assess' checkpoint"
     return verdict, trace

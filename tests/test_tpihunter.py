@@ -278,6 +278,57 @@ class TestMcpSession(unittest.TestCase):
         self.assertEqual(r["severity"], "safe")
 
 
+class TestNewActionSynthesis(unittest.TestCase):
+    def test_registered_action_finds_bug_beyond_alphabet(self):
+        from tpihunter.enumerator import ACTIONS
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-patched")
+        # known laundering is fixed on the patched target
+        self.assertEqual(
+            s.run_probe([["attacker", "register"], ["victim", "sso_login"]])["severity"], "safe")
+        # the agent hypothesizes the parallel passwordless flow
+        self.assertTrue(s.register_action("magic_link", "raise", needs_control=True)["ok"])
+        self.assertIn("magic_link", s.list_actions()["actions"])
+        r = s.run_probe([["attacker", "register"], ["victim", "magic_link"]])
+        self.assertEqual(r["severity"], "takeover")
+        self.assertEqual(r["clause_id"], "TPI-1")
+        self.assertEqual(s.findings()["distinct_bugs"], 1)
+        # never mutate the global alphabet
+        self.assertNotIn("magic_link", ACTIONS)
+
+    def test_register_action_validates_effect(self):
+        from tpihunter.mcp_tools import HuntSession
+        self.assertFalse(HuntSession().register_action("x", "not-an-effect")["ok"])
+
+    def test_distinct_trigger_verbs_are_separate_bugs(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-vulnerable")
+        s.register_action("magic_link", "raise", needs_control=True)
+        s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        s.run_probe([["attacker", "register"], ["victim", "magic_link"]])
+        f = s.findings()
+        # both are TPI-1 laundering, but via different flows -> two distinct findings
+        self.assertEqual(f["distinct_bugs"], 2)
+        self.assertEqual([b["clause_id"] for b in f["bugs"]], ["TPI-1", "TPI-1"])
+        repros = " ".join(b["minimal_repro"] for b in f["bugs"])
+        self.assertIn("sso_login", repros)
+        self.assertIn("magic_link", repros)
+
+    def test_api_strategist_can_synthesize_actions(self):
+        # the LLM strategist declares a new action and a probe using it, in one reply
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        reply = json.dumps({
+            "new_actions": [{"id": "magic_link", "effect": "raise",
+                             "requires": [], "needs_control": True}],
+            "probes": [{"steps": [["attacker", "register"], ["victim", "magic_link"]]}],
+        })
+        hunter = AgentHunter(lambda: MockAdapter(patched=True, control=control),
+                             attacker, victim, EMAIL, budget=20)
+        res = hunter.hunt(LLMStrategist(lambda _p: reply, max_rounds=1))
+        self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
+
+
 class TestLLM(unittest.TestCase):
     def test_complete_returns_text_and_sends_opus(self):
         from tpihunter.llm import anthropic_complete

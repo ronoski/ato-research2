@@ -166,22 +166,23 @@ as invitations to improve:
 
 ## 6. Your next task
 
-The loop is live both via the API strategist (M9) and — the owner's path — via the
-**Claude Code agent on a Max subscription** through the MCP server (M10). The mock loop
-is complete; the frontier is richer hypotheses and real targets. From `STATUS.md` →
-*Pick this up next*:
+The mock loop is complete: live via the API strategist (M9) and via the Claude Code agent
+on a Max subscription (M10, the owner's path), and the agent can extend its own alphabet
+(M11). The frontier is **real targets**. From `STATUS.md` → *Pick this up next*:
 
-1. **New-action synthesis (top lever).** The enumerator/agent only interleave a *fixed*
-   alphabet; real targets have flows it lacks (magic links, device pairing, org invites,
-   email aliasing/plus-addressing). Let the strategist register a new action (id + effect
-   + requires + needs_control) and probe with it. Extend `HuntSession`/`briefing` (MCP
-   path) and `HuntState`/`render_prompt` (API path) so a proposed `ActionSpec` feeds
-   straight into generation. This is what finds bugs an enumerator never could.
-2. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner; then
-   point `HuntSession` and the learner (`sul.py`) at it — where the MCP hunt goes live.
-3. **M7 — evidence bundle.** Turn each `findings()` bug (or dedup `Cluster`) into a
+1. **M4 — real `TargetAdapter` (the big one).** Implement `TargetAdapter` (and a
+   real-target `HuntSession`) against an authorized live app: one `httpx` client per
+   principal, real register/login/sso/reset flows, a real mailbox channel
+   (`channels.EmailChannel`), and the oracle surface (`whoami` + a private per-account
+   resource for the canary). Then the whole stack runs against something real.
+   **Blocked on an authorized target from the owner** — see Scope in `README.md`; do not
+   point at anything without written authorization.
+2. **M7 — evidence bundle.** Turn each `findings()` bug (or dedup `Cluster`) into a
    shareable report; `run_plan(build_plan(cluster.representative, …))` gives the full
    `Trace` + `Verdict` for the repro.
+3. **Robustness for real targets:** adapter rate-limit/backoff, oracle retry on a suspect
+   verdict (real targets are noisy), and a richer param model for synthesized actions
+   (currently email-only).
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).

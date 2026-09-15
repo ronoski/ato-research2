@@ -84,6 +84,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `synth_demo.py` | self-test of the closed loop (learn → synthesize → enumerate) |
 | `agent_demo.py` | self-test of the agent loop (enumerator vs a fake-LLM strategist) |
 | `live_agent_demo.py` | the real LLM strategist on the mock (gated by `TPIHUNTER_LIVE=1`) |
+| `newaction_demo.py` | the agent registering a new action to find a bug beyond the alphabet |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -182,10 +183,29 @@ In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumer
   claude mcp add tpihunter -- python3 -m tpihunter.mcp_server
   ```
 
-  Tools: `briefing()`, `list_actions()`, `run_probe(steps)`, `findings()`, `reset(target)`.
-  The agent reads the briefing, proposes probes, adapts to verdicts, and reports the
-  distinct bugs. `HuntSession` in `mcp_tools.py` holds all the logic (stdlib, tested); the
-  server is a thin wrapper.
+  Tools: `briefing()`, `list_actions()`, `run_probe(steps)`, `register_action(...)`,
+  `findings()`, `reset(target)`. The agent reads the briefing, proposes probes, adapts to
+  verdicts, and reports the distinct bugs. `HuntSession` in `mcp_tools.py` holds all the
+  logic (stdlib, tested); the server is a thin wrapper.
+
+## New-action synthesis — the agent escapes the fixed alphabet
+
+The built-in alphabet is a *starting point*, not the whole target. Real auth systems have
+flows it lacks (magic-link login, device pairing, org invites, email aliasing), and a fix
+applied to one flow is often missing on a parallel one. The agent can register a new
+action and probe with it — `register_action(id, effect, requires, needs_control)` on the
+MCP path, or a `new_actions` block in the `LLMStrategist` reply on the API path.
+
+```
+python3 -m tpihunter.newaction_demo
+```
+
+On the *patched* mock, both known laundering flows are fixed — so the fixed alphabet finds
+nothing. But the fix was applied to SSO and not to the parallel `magic_link` flow; the
+agent registers `magic_link` and finds a **TPI-1 laundering an enumerator never could**.
+Supporting this required an effect-based oracle diagnosis (new verbs classify), generic
+harness dispatch, and a trigger-aware dedup signature (a bug via a new verb is a distinct
+finding). Registration never mutates the global alphabet.
 
 ## Automata learning
 

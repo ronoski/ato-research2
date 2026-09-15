@@ -84,6 +84,15 @@ class VulnerableTarget:
         acc.email_verified = True      # the victim's IdP proof upgrades the row
         return self._issue(acc.id), acc.id
 
+    def magic_link(self, email: str) -> tuple[str, str]:
+        # A passwordless email login: proving inbox control also verifies the row.
+        # NOTE: the revoke-on-rebind fix (see sso_login) was NEVER applied here — a
+        # realistic "fixed one flow, forgot the parallel one" gap. So this launders
+        # even on the patched target, and only reachable if the agent knows to try it.
+        acc = self._get_or_create(email)
+        acc.email_verified = True
+        return self._issue(acc.id), acc.id
+
     def reset_request(self, email: str) -> Optional[str]:
         aid = self.by_email.get(email)
         if aid is None:
@@ -151,6 +160,17 @@ class MockAdapter:
         proof = ProofEvent(p, Identifier("email", email), Channel.IDP)
         return Observation(True, identity=aid, proof=proof,
                            note=f"{p} proved control of {email} via IdP; row now 'verified'")
+
+    def magic_link(self, p: Principal, email: str) -> Observation:
+        # A passwordless email-login flow, outside the default alphabet. Needs inbox
+        # control, like a reset. The agent must know such flows exist to try it.
+        if not self._controls(p, email):
+            return Observation(False, note=f"{p} cannot read the {email} inbox")
+        tok, aid = self.t.magic_link(email)
+        self.sess[p.name] = tok
+        proof = ProofEvent(p, Identifier("email", email), Channel.EMAIL)
+        return Observation(True, identity=aid, proof=proof,
+                           note=f"{p} logged in via magic link; row now 'verified'")
 
     def reset_request(self, p: Principal, email: str) -> Observation:
         tok = self.t.reset_request(email)

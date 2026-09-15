@@ -24,7 +24,7 @@ from typing import Callable, Optional, Protocol
 
 from .clauses import CLAUSES
 from .dedup import Cluster, deduplicate
-from .enumerator import ACTIONS, ActionSpec, is_wellformed, make_candidate
+from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate
 from .harness import run_plan
 from .oracle import AtoOracle
 from .types import Principal
@@ -131,16 +131,28 @@ What you have tried and what happened:
 
 Budget remaining: {state.budget} probes.
 
-Propose the next probes as a JSON array. Each probe is an object:
-  {{"steps": [["attacker","register"], ["victim","sso_login"]]}}
-Prefer short probes that seed an attacker binding, then have the victim raise trust
-or change a credential on the same account. Output ONLY the JSON array."""
+The alphabet is a STARTING point. Real auth systems have flows it lacks — magic-link /
+passwordless login, device pairing, org invites, adding a secondary email, email
+aliasing. If you suspect one exists, declare it as a new action (a fix applied to one
+flow is often missing on a parallel one). effect is one of seed/raise/cred/request;
+set needs_control=true if only the inbox/IdP owner can do it.
+
+Reply with ONLY a JSON object:
+  {{"new_actions": [{{"id":"magic_link","effect":"raise","requires":[],"needs_control":true}}],
+   "probes": [{{"steps": [["attacker","register"], ["victim","magic_link"]]}}]}}
+new_actions may be omitted. Prefer short probes that seed an attacker binding, then have
+the victim raise trust or change a credential on the same account."""
 
     # --- parse the model's reply into interleavings --------------------------
     def parse_proposals(self, text: str, state: HuntState) -> list[Merged]:
         raw = self._extract_json(text)
+        if isinstance(raw, dict):
+            self._register_new_actions(raw.get("new_actions", []), state)
+            probes = raw.get("probes", [])
+        else:
+            probes = raw   # a bare array of probes (back-compat)
         out: list[Merged] = []
-        for item in raw:
+        for item in probes if isinstance(probes, list) else []:
             steps = item.get("steps") if isinstance(item, dict) else item
             if not isinstance(steps, list):
                 continue
@@ -151,16 +163,31 @@ or change a credential on the same account. Output ONLY the JSON array."""
         return out
 
     @staticmethod
-    def _extract_json(text: str) -> list:
+    def _register_new_actions(new_actions, state: HuntState) -> None:
+        """Extend the alphabet in place with any well-formed action the model declared."""
+        valid = {e.value for e in Effect}
+        for a in new_actions if isinstance(new_actions, list) else []:
+            if not isinstance(a, dict):
+                continue
+            aid, effect = a.get("id"), a.get("effect")
+            if not aid or effect not in valid:
+                continue
+            requires = tuple(r for r in (a.get("requires") or []) if r in state.specs)
+            state.specs[str(aid)] = ActionSpec(str(aid), Effect(effect), requires=requires,
+                                               needs_control=bool(a.get("needs_control")))
+
+    @staticmethod
+    def _extract_json(text: str):
         try:
             return json.loads(text)
         except Exception:
-            i, j = text.find("["), text.rfind("]")
-            if 0 <= i < j:
-                try:
-                    return json.loads(text[i:j + 1])
-                except Exception:
-                    return []
+            for lo, hi in (("{", "}"), ("[", "]")):
+                i, j = text.find(lo), text.rfind(hi)
+                if 0 <= i < j:
+                    try:
+                        return json.loads(text[i:j + 1])
+                    except Exception:
+                        pass
             return []
 
 
@@ -188,12 +215,14 @@ class AgentHunter:
         self.attacker = attacker
         self.victim = victim
         self.email = email
-        self.specs = specs if specs is not None else ACTIONS
+        # a private copy — a strategist may extend the alphabet (new-action synthesis)
+        self.specs = dict(specs) if specs is not None else dict(ACTIONS)
         self.budget = budget
 
     def _verdict(self, plan):
         a = self.adapter_factory()
-        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim))[0]
+        effects = {n: s.effect.value for n, s in self.specs.items()}
+        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=effects))[0]
 
     def hunt(self, strategist: Strategist) -> HuntResult:
         state = HuntState(self.specs, self.attacker, self.victim, self.email,
