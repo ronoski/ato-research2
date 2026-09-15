@@ -76,6 +76,8 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
 | `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM) |
 | `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
+| `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib) |
+| `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
@@ -170,10 +172,20 @@ In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumer
   SDK (default `claude-opus-5`, adaptive thinking). Best for CI / headless / non-Claude-
   Code runs. **Bills pay-per-token on the Messages API — separate from a Claude Max/Pro
   subscription.** Run it with `TPIHUNTER_LIVE=1 python3 -m tpihunter.live_agent_demo`.
-- **Claude Code / Max subscription** (planned, M10): expose the loop's primitives as an
+- **Claude Code / Max subscription** (`mcp_server.py`): expose the loop's primitives as an
   **MCP server** so the Opus agent in the Claude Code CLI drives the hunt — Claude Code
   *is* the strategist, running on your subscription, no API key. This is the path for
-  hunting on a Max plan.
+  hunting on a Max plan:
+
+  ```bash
+  pip install "mcp[cli]"
+  claude mcp add tpihunter -- python3 -m tpihunter.mcp_server
+  ```
+
+  Tools: `briefing()`, `list_actions()`, `run_probe(steps)`, `findings()`, `reset(target)`.
+  The agent reads the briefing, proposes probes, adapts to verdicts, and reports the
+  distinct bugs. `HuntSession` in `mcp_tools.py` holds all the logic (stdlib, tested); the
+  server is a thin wrapper.
 
 ## Automata learning
 

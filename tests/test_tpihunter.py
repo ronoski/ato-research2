@@ -240,6 +240,44 @@ class TestAgent(unittest.TestCase):
         self.assertEqual(strat.parse_proposals("not json at all", state), [])
 
 
+class TestMcpSession(unittest.TestCase):
+    def _session(self, target="mock-vulnerable"):
+        from tpihunter.mcp_tools import HuntSession
+        return HuntSession(target=target)
+
+    def test_briefing_and_actions(self):
+        s = self._session()
+        b = s.briefing()
+        self.assertIn("LAUNDERING", b["method"])
+        self.assertTrue(any(c["id"] == "TPI-1" for c in b["clauses"]))
+        self.assertEqual(set(s.list_actions()["actions"]),
+                         {"register", "login", "sso_login", "reset_request", "reset_consume"})
+
+    def test_run_probe_takeover_and_findings(self):
+        s = self._session()
+        r1 = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        self.assertEqual(r1["severity"], "takeover")
+        self.assertEqual(r1["clause_id"], "TPI-1")
+        self.assertTrue(r1["is_new_takeover"])
+        s.run_probe([["attacker", "register"], ["victim", "reset_request"], ["victim", "reset_consume"]])
+        f = s.findings()
+        self.assertEqual(f["distinct_bugs"], 2)
+        self.assertEqual(sorted(b["clause_id"] for b in f["bugs"]), ["TPI-1", "TPI-4"])
+
+    def test_run_probe_safe_and_invalid(self):
+        s = self._session()
+        self.assertEqual(s.run_probe([["attacker", "register"]])["severity"], "safe")
+        self.assertFalse(s.run_probe([["attacker", "reset_consume"]])["ok"])   # ordering
+        self.assertFalse(s.run_probe([["attacker", "nope"]])["ok"])            # unknown action
+        self.assertFalse(s.run_probe([["nobody", "register"]])["ok"])          # bad role
+
+    def test_patched_target_is_safe(self):
+        # the load-bearing invariant, exercised through the tool surface
+        s = self._session(target="mock-patched")
+        r = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        self.assertEqual(r["severity"], "safe")
+
+
 class TestLLM(unittest.TestCase):
     def test_complete_returns_text_and_sends_opus(self):
         from tpihunter.llm import anthropic_complete

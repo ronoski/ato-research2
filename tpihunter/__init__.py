@@ -19,6 +19,7 @@ from .agent import (AgentHunter, EnumeratorStrategist, HuntResult, HuntState,
 from .clauses import CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
 from .harness import Plan, Step, run_plan
+from .mcp_tools import HuntSession
 from .oracle import AtoOracle, Evidence, Severity, Verdict
 from .types import Channel, Identifier, Observation, Principal, ProofEvent, TrustLevel
 
@@ -31,6 +32,7 @@ __all__ = [
     "AgentHunter", "Strategist", "EnumeratorStrategist", "LLMStrategist",
     "HuntState", "HuntResult",
     "Cluster", "deduplicate",
+    "HuntSession",
     "CLAUSES", "FailureMode",
     "Plan", "Step", "run_plan",
     "AtoOracle", "Evidence", "Severity", "Verdict",

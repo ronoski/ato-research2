@@ -91,6 +91,8 @@ The loop the project implements:
 | `dedup.py` | collapses fired findings to distinct bugs (causal minimization + signature) |
 | `agent.py` | **the goal**: `AgentHunter` loop + `Strategist` seam (enumerator baseline, LLM seam) |
 | `llm.py` | real-model backend for `LLMStrategist` (isolates `anthropic`; API/pay-per-token path) |
+| `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib, tested) |
+| `mcp_server.py` | MCP server so the Claude Code agent hunts on a Max plan (isolates `mcp`) |
 | `sul.py` | System-Under-Learning interface + single-account view of the mock |
 | `learner.py` | Angluin's L* Mealy learner (black-box automata learning) |
 | `synthesis.py` | learned machine → the enumerator's `ActionSpec` model (closes the loop) |
@@ -164,25 +166,22 @@ as invitations to improve:
 
 ## 6. Your next task
 
-The loop is live via the API strategist (M9). **The owner hunts on a Claude Max 20x
-subscription**, so the priority is making the Claude Code CLI agent the strategist (that
-runs on the subscription; the API path bills separately). From `STATUS.md` → *Pick this
-up next*:
+The loop is live both via the API strategist (M9) and — the owner's path — via the
+**Claude Code agent on a Max subscription** through the MCP server (M10). The mock loop
+is complete; the frontier is richer hypotheses and real targets. From `STATUS.md` →
+*Pick this up next*:
 
-1. **M10 — Claude-Code / Max-subscription strategist (owner's goal).** Build a tpihunter
-   **MCP server** exposing the loop's primitives (`learn_target`, `enumerate_candidates`,
-   `run_probe(steps)->verdict`, `dedup_findings`, `report`). Then `claude mcp add
-   tpihunter …` and the Opus agent in Claude Code drives the hunt on the Max plan — no
-   API key. Everything it needs already exists as functions (`AgentHunter` internals,
-   `run_plan`, `deduplicate`); keep the `mcp` dep isolated like `llm.py` isolates
-   `anthropic`. Accept: from a Claude Code session, "hunt the mock" → 2 distinct bugs.
-2. **New-action synthesis** — let the strategist propose *new* `ActionSpec`s (flows the
-   fixed alphabet lacks: magic links, device pairing, org invites, email aliasing),
-   feeding straight into generation. Applies to both strategists.
-3. **M7 (evidence bundle)** — turn each dedup `Cluster` into a shareable report; the
-   agent's final "report" step. `dedup.deduplicate(...)` gives the distinct bugs + minimal
-   repros; `run_plan(build_plan(cluster.representative, …))` gives the full `Trace`.
-4. **M4 (real adapter)** — blocked on an authorized target from the owner.
+1. **New-action synthesis (top lever).** The enumerator/agent only interleave a *fixed*
+   alphabet; real targets have flows it lacks (magic links, device pairing, org invites,
+   email aliasing/plus-addressing). Let the strategist register a new action (id + effect
+   + requires + needs_control) and probe with it. Extend `HuntSession`/`briefing` (MCP
+   path) and `HuntState`/`render_prompt` (API path) so a proposed `ActionSpec` feeds
+   straight into generation. This is what finds bugs an enumerator never could.
+2. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner; then
+   point `HuntSession` and the learner (`sul.py`) at it — where the MCP hunt goes live.
+3. **M7 — evidence bundle.** Turn each `findings()` bug (or dedup `Cluster`) into a
+   shareable report; `run_plan(build_plan(cluster.representative, …))` gives the full
+   `Trace` + `Verdict` for the repro.
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).
