@@ -210,7 +210,7 @@ class AgentHunter:
 
     def __init__(self, adapter_factory: AdapterFactory, attacker: Principal,
                  victim: Principal, email: str, specs: Optional[dict[str, ActionSpec]] = None,
-                 budget: int = 200) -> None:
+                 budget: int = 200, confirm: int = 0) -> None:
         self.adapter_factory = adapter_factory
         self.attacker = attacker
         self.victim = victim
@@ -218,11 +218,15 @@ class AgentHunter:
         # a private copy — a strategist may extend the alphabet (new-action synthesis)
         self.specs = dict(specs) if specs is not None else dict(ACTIONS)
         self.budget = budget
+        # oracle confirmation passes — leave 0 against the deterministic mock, raise it
+        # against a flaky/rate-limited real target so a verdict must reproduce before it fires.
+        self.confirm = confirm
 
     def _verdict(self, plan):
         a = self.adapter_factory()
         effects = {n: s.effect.value for n, s in self.specs.items()}
-        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=effects))[0]
+        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
+                                           effects=effects, confirm=self.confirm))[0]
 
     def hunt(self, strategist: Strategist) -> HuntResult:
         state = HuntState(self.specs, self.attacker, self.victim, self.email,

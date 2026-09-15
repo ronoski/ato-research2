@@ -44,11 +44,14 @@ class HuntSession:
     agent can call run_probe repeatedly and then ask for the distinct bugs."""
 
     def __init__(self, target: str = "mock-vulnerable",
-                 email: str = "victim@corp.example") -> None:
+                 email: str = "victim@corp.example", confirm: int = 0) -> None:
         self.attacker = Principal("attacker")
         self.victim = Principal("victim")
         self.email = email
         self.control = {self.victim.name: {self.email}}   # victim controls the inbox/IdP
+        # oracle confirmation passes: 0 for the deterministic mock; raise against a flaky
+        # real target so a takeover must reproduce across passes before it is reported.
+        self.confirm = confirm
         self.reset(target)
 
     # -- lifecycle ------------------------------------------------------------
@@ -156,7 +159,8 @@ class HuntSession:
         cand = make_candidate(merged, self.attacker, self.victim, self.email, self.specs)
         adapter = self._adapter(self.control)
         verdict, trace = run_plan(adapter, cand.plan,
-                                  AtoOracle(adapter, self.attacker, self.victim, effects=self._effects()))
+                                  AtoOracle(adapter, self.attacker, self.victim,
+                                            effects=self._effects(), confirm=self.confirm))
         self.probes_run += 1
         unbound = [s.action for s in trace.steps
                    if s.obs and not s.obs.ok and "no binding" in (s.obs.note or "")]
@@ -247,7 +251,8 @@ class HuntSession:
     # -- internals ------------------------------------------------------------
     def _run_pair(self, plan):
         a = self._adapter(self.control)
-        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=self._effects()))
+        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
+                                           effects=self._effects(), confirm=self.confirm))
 
     def _verdict(self, plan):
         return self._run_pair(plan)[0]

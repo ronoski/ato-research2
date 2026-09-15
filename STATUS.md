@@ -15,11 +15,11 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + nine self-tests pass:
-`python3 -m unittest discover` (40 tests), and `python3 -m tpihunter.{demo,enum_demo,
-learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo}`
-(the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
-`python3 -m tpihunter.mcp_server` (needs `mcp`).
+**Baseline (last verified green): 2026-09-15.** Test suite + ten self-tests pass:
+`python3 -m unittest discover` (45 tests), and `python3 -m tpihunter.{demo,enum_demo,
+learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo,
+retry_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude
+Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
 
@@ -42,6 +42,7 @@ learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matr
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
 | **revocation** | `matrix` — mutation × binding-kind × plane lifecycle mode (own-account) | ✅ done (M12; +cross-plane, +factor/lifecycle kinds) |
+| **robustness** | oracle confirmation — a verdict must reproduce before it fires | ✅ done (M13) |
 
 ---
 
@@ -226,6 +227,28 @@ on the owner's **Claude Max 20x subscription** instead of pay-per-token API bill
   and `findings()` returns 2 distinct bugs; the patched target returns safe (invariant).
   +5 tests (suite 23).
 
+### ✅ M13 — Oracle confirmation (verdict stability under flaky targets)  *(done 2026-09-15, session 4)*
+The first roadmap **robustness** item, and the one that most directly de-risks a real
+target: the oracle had no retry, so a single transient error on a rate-limited/lossy real
+target could flip a verdict — either miss a real takeover or (the dangerous case) fabricate
+one, breaking the load-bearing invariant.
+- Files: `oracle.py` (`AtoOracle(confirm=k)`, `_gather`/`_reconcile`), `flaky.py`
+  (`FlakyAdapter` — drops the *attacker's* read observations, deterministic under a seed),
+  `retry_demo.py`; `confirm` threaded through `AgentHunter` and `HuntSession` (default 0).
+- Mechanism: `assess` runs `1+confirm` evidence passes and reports a non-SAFE severity only
+  if it holds a **strict majority**; with no majority the honest answer is SUSPECT — so a
+  takeover that cannot be reproduced never fires, and access we did see is never called SAFE.
+  Confidence = the winning grade's confidence × the agreement fraction. `confirm=0` is one
+  pass and is byte-identical to the pre-confirmation oracle (all prior tests unchanged).
+- Why it's sound: `FlakyAdapter` can only *remove* evidence, never fabricate it, so on the
+  patched target confirmation can never manufacture a takeover — recall is bought back with
+  **zero** cost to the invariant. `retry_demo` shows it: at drop=0.6 a single probe misses
+  ~3/24 real takeovers; confirmation recovers all 24 and fires 0 false takeovers on patched.
+- +5 tests (suite 45), 10 demos, import isolation intact (`flaky` is stdlib `random`).
+- **Still open (the sibling robustness item):** a param model richer than email-only for
+  synthesized actions — `enumerator._to_plan` gives a new action only `{"email": …}`, so
+  magic-link codes / invite tokens / second identifiers can't be passed. See *Pick this up next*.
+
 ---
 
 ## Pick this up next
@@ -251,8 +274,12 @@ deferred**, not the next task. In priority order now:
    current matrix against something real. On the Grab lens, the matrix already maps to TPI-L1
    (logout/plane), TPI-L2 (reset survival) and T-ATO-22 (factor survives reset).
 3. **Robustness (do-able now against the mock, de-risks any future live adapter):**
-   oracle retry on a suspect verdict, and a param model richer than email-only for
-   synthesized actions (magic-link codes, invites, aliasing).
+   ✅ oracle confirmation/retry landed (M13) — a verdict must reproduce before it fires.
+   **Remaining:** a param model richer than email-only for synthesized actions (magic-link
+   codes, invites, aliasing) — `enumerator._to_plan` gives a new action only `{"email": …}`,
+   so a flow needing a code / invite token / second identifier can't be driven yet. This is
+   the highest-value now-doable item: it lets the agent's new-action synthesis (M11) reach
+   flows it currently can propose but not fully exercise.
 4. **M4 — real `TargetAdapter`** — only if a promoted TPI-L hypothesis genuinely needs a
    bespoke runner the *grab* toolchain can't express; ROE hard-wired (X-Bug-Bounty header,
    own-accounts-only, in-scope allowlist, preflight-gated). The revocation matrix is the
@@ -288,6 +315,23 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 4 — M13: oracle confirmation (robustness).* Picked the first
+  roadmap robustness item because M4 is owner-gated and this is what most directly de-risks
+  it: the oracle had **no retry**, so on a flaky/rate-limited real target a single transient
+  error could flip a verdict — miss a real takeover, or worse, fabricate one and break the
+  load-bearing invariant. Added `AtoOracle(confirm=k)`: `assess` now runs `1+k` evidence
+  passes (`_gather`) and `_reconcile` reports a non-SAFE severity only on a **strict
+  majority** — no majority ⇒ SUSPECT, so an unreproducible takeover never fires. `confirm=0`
+  (the default) is one pass, byte-identical to before (every prior test unchanged). Added
+  `flaky.py` (`FlakyAdapter`, drops only the *attacker's* reads, deterministic under a seed —
+  it can remove evidence but never fabricate it, so confirmation buys back recall at **zero**
+  cost to the invariant), `retry_demo.py`, and threaded `confirm` through `AgentHunter` and
+  `HuntSession` (default 0). Demo at drop=0.6: a single probe misses ~3/24 real takeovers,
+  confirmation recovers all 24 and fires 0 false takeovers on the patched target. +5 tests
+  (suite 45), 10 demos, isolation intact (`flaky` uses stdlib `random`). **Next:** the sibling
+  robustness item — a param model richer than email-only for synthesized actions (magic-link
+  codes / invites / second identifiers), the highest-value now-doable step while M4 stays
+  owner-gated. See *Pick this up next* §3.
 - **2026-09-15** — *End of shift (s3) — handing back to the next shift.* Two judgment modes
   are complete and self-validating on the mock: two-principal confluence (`oracle`) and the
   single-principal **revocation matrix** (`matrix` — cross-plane SPLIT + session/factor

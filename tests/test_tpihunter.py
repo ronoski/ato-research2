@@ -88,6 +88,74 @@ class TestOracle(unittest.TestCase):
         self.assertEqual(v.severity.value, "safe")
 
 
+class TestOracleConfirmation(unittest.TestCase):
+    """M13: a verdict must reproduce (strict majority of passes) before it fires, so a
+    flaky/rate-limited target cannot flip it. `confirm=0` stays identical to before."""
+
+    def _plan(self, attacker, victim):
+        return pre_hijacking_plan(attacker, victim, EMAIL)
+
+    def _flaky(self, patched, seed, drop=0.7):
+        from tpihunter.flaky import FlakyAdapter
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        return FlakyAdapter(MockAdapter(patched=patched, control=control),
+                            attacker.name, drop=drop, seed=seed)
+
+    def test_confirm_zero_matches_legacy_behaviour(self):
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        for patched, expect in ((False, "takeover"), (True, "safe")):
+            a = MockAdapter(patched=patched, control=control)
+            v = run_plan(a, self._plan(attacker, victim),
+                         AtoOracle(a, attacker, victim, confirm=0))[0]
+            self.assertEqual(v.severity.value, expect)
+
+    def test_flaky_single_probe_misses_but_confirmation_recovers(self):
+        attacker, victim = _principals()
+        # find a seed where a single flaky probe MISSES the real takeover, then show that
+        # confirmation on the SAME flaky target recovers the true verdict
+        missed = None
+        for s in range(60):
+            a = self._flaky(False, s)
+            if run_plan(a, self._plan(attacker, victim),
+                        AtoOracle(a, attacker, victim, confirm=0))[0].severity.value != "takeover":
+                missed = s
+                break
+        self.assertIsNotNone(missed, "expected at least one flaky single-probe miss")
+        a = self._flaky(False, missed)
+        v = run_plan(a, self._plan(attacker, victim),
+                     AtoOracle(a, attacker, victim, confirm=12))[0]
+        self.assertEqual(v.severity.value, "takeover")
+
+    def test_confirmation_never_fires_on_patched_when_flaky(self):
+        # the load-bearing invariant survives flakiness at every seed and any confirm count
+        attacker, victim = _principals()
+        for seed in range(30):
+            a = self._flaky(True, seed)
+            v = run_plan(a, self._plan(attacker, victim),
+                         AtoOracle(a, attacker, victim, confirm=6))[0]
+            self.assertNotEqual(v.severity.value, "takeover")
+
+    def test_wrapper_passes_non_attacker_calls_through(self):
+        from tpihunter.flaky import FlakyAdapter
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        w = FlakyAdapter(MockAdapter(patched=False, control=control),
+                         attacker.name, drop=1.0, seed=0)
+        w.register(victim, EMAIL, "VictimPw!1")       # pass-through mutating call
+        self.assertTrue(w.whoami(victim).ok)          # victim is never flapped
+        self.assertFalse(w.whoami(attacker).ok)       # attacker flapped at drop=1.0
+
+    def test_agent_hunter_accepts_confirm(self):
+        # threading confirm through the agent loop still finds the bugs on the (clean) mock
+        attacker, victim = _principals()
+        hunter = AgentHunter(_adapter_factory(victim), attacker, victim, EMAIL,
+                             budget=300, confirm=2)
+        res = hunter.hunt(EnumeratorStrategist())
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+
+
 class TestEnumerator(unittest.TestCase):
     def test_finds_both_clauses(self):
         _n, fired, _gaps = _enumerate()

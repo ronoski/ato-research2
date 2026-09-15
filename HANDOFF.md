@@ -11,6 +11,9 @@ The relay so far (what each shift built — see `git log` and the Changelog):
   new-action synthesis, the evidence bundle.
 - **s3** — the Grab engagement lens (offline), and the **revocation matrix** (a whole
   second hunting mode: cross-plane + factor/lifecycle kinds).
+- **s4** — **oracle confirmation** (M13): a verdict must reproduce (strict majority of
+  re-probes) before it fires, so a flaky/rate-limited real target can't flip it — the first
+  robustness item, and the one that most directly de-risks going live.
 
 Your shift, in order: (1) get oriented, (2) review the existing work with a critical eye,
 (3) improve what needs it and continue the roadmap, (4) leave the tree green and hand back
@@ -56,10 +59,10 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 
 ## 2. Get oriented in five minutes
 
-Run the test suite and the seven self-tests — the fastest way to see what exists:
+Run the test suite and the ten self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 40 tests: the invariants that must not regress
+python3 -m unittest discover     # 45 tests: the invariants that must not regress
 python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
@@ -69,6 +72,7 @@ python3 -m tpihunter.live_agent_demo  # the real LLM strategist (gated by TPIHUN
 python3 -m tpihunter.newaction_demo   # the agent registers a new action to find a bug beyond the alphabet
 python3 -m tpihunter.matrix_demo      # the revocation matrix: a 'patched' target still leaks via logout
 python3 -m tpihunter.report_demo      # hunt the mock, then print the submittable evidence bundle
+python3 -m tpihunter.retry_demo       # oracle confirmation: a flaky target can't flip the verdict (M13)
 ```
 
 Then read, in this order:
@@ -78,7 +82,7 @@ Then read, in this order:
 3. **`tpihunter/README.md`** — the tool in depth
 4. **the code**, in dependency order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
-   `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
+   `flaky.py` → `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
    `dedup.py` → `matrix.py` → `sul.py` → `learner.py` → `synthesis.py` → `agent.py` →
    `mcp_tools.py` → `mcp_server.py` → `llm.py` → `report.py`
 
@@ -107,7 +111,8 @@ The loop the project implements:
 | `clauses.py` | the TPI invariant clauses a verdict can cite (TPI-1…TPI-5) |
 | `channels.py` | out-of-band providers (email inbox, TOTP) behind interfaces |
 | `adapter.py` | `TargetAdapter` — the **two-principal** surface (alphabet Σ) + the `Trace` it records |
-| `oracle.py` | `AtoOracle` — the **verdict engine** (the star) |
+| `oracle.py` | `AtoOracle` — the **verdict engine** (the star); `confirm=k` re-probes and requires a strict majority so a flaky target can't flip a verdict (M13) |
+| `flaky.py` | `FlakyAdapter` — wraps an adapter and drops the attacker's reads (deterministic under a seed); exercises oracle confirmation without a real target |
 | `mock_target.py` | a deliberately vulnerable in-memory target + adapter, with a `patched` toggle |
 | `harness.py` | `Plan`/`Step` + `run_plan`: probes as data, run with oracle checkpoints |
 | `probes.py` | hand-written TPI probe plans |
@@ -152,8 +157,12 @@ invitations to improve:
   effect-based (`AtoOracle(effects=…)`, so new verbs classify), with the old name heuristic
   as a fallback; the *grading* (`_grade`) treats an identity-confluence as a decisive
   takeover. Convince yourself confluence can't false-positive on a legitimately shared /
-  tenant / SSO-org account on a real target. The oracle has **no retry** — a flaky real
-  target could flip a verdict; a suspect→retry loop is on the roadmap.
+  tenant / SSO-org account on a real target. Retry landed (M13): `AtoOracle(confirm=k)`
+  re-probes and reports a non-SAFE verdict only on a strict majority (no majority ⇒ SUSPECT),
+  so a flaky target can't flip a verdict; `confirm=0` (default) is unchanged. Still to weigh:
+  the majority rule assumes *independent* transient failures — a systematically misleading
+  target (e.g. a cache that consistently returns stale identity) would fool every pass; that
+  needs a different signal, not more passes.
 - **Dedup signature is `(clause, effect-set, trigger-verbs)`** (`dedup.py`). It merges
   padding/order variants but keeps different trigger endpoints (e.g. `sso_login` vs a
   synthesized `magic_link`) separate. Still coarse on role/count — if a real target shows a
@@ -170,10 +179,11 @@ invitations to improve:
   machine can be incomplete for larger alphabets. A W-method / Wp-method conformance oracle
   would make it sound within a bound. *(Still open.)*
 - **Tests are the safety net — extend them with every change.** `tests/test_tpihunter.py`,
-  stdlib `unittest`, **40 tests** covering the load-bearing invariant, the learn→synthesize
+  stdlib `unittest`, **45 tests** covering the load-bearing invariant, the learn→synthesize
   pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`,
   new-action synthesis, the revocation matrix (cross-plane SPLIT + factor/lifecycle kinds +
-  the expectation model), and the report bundle. Add assertions for whatever you build.
+  the expectation model), oracle confirmation under a flaky target (M13), and the report
+  bundle. Add assertions for whatever you build.
 
 ---
 
@@ -188,7 +198,7 @@ invitations to improve:
   (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
   never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
   `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
-- **`unittest discover` (40 tests) and all nine demos stay green.** Don't hand back on red.
+- **`unittest discover` (45 tests) and all ten demos stay green.** Don't hand back on red.
 
 ---
 
@@ -211,9 +221,12 @@ matrix. From `STATUS.md` → *Pick this up next*:
    mode (own-account, reversible, reads no one else's data), which is precisely why the real
    Grab engagement's cheap wins (TPI-L1/L2) are matrix-shaped. Do not point at anything
    without written authorization; see Scope in `README.md`.
-3. **Robustness** (do-able now against the mock, de-risks M4): oracle retry on a suspect
-   verdict, and a richer param model for synthesized actions — currently `_to_plan` gives a
-   new action only `{"email": …}`, so codes / invite tokens / second identifiers can't pass.
+3. **Robustness** (do-able now against the mock, de-risks M4): ✅ oracle retry landed (M13 —
+   `AtoOracle(confirm=k)`, `flaky.py`, `retry_demo`). **The remaining, highest-value now-doable
+   item** is a richer param model for synthesized actions — currently `_to_plan` gives a new
+   action only `{"email": …}`, so codes / invite tokens / second identifiers can't pass, which
+   caps what the agent's new-action synthesis (M11) can actually drive. This is a strong pick
+   for the next shift while M4 stays owner-gated.
 4. **W-method conformance oracle** for the learner (soundness within a bound).
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
@@ -223,7 +236,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all nine demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all ten demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -240,4 +253,4 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
 - Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
 - `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds. Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds → M13 oracle confirmation. Each shift is one or more commits ending with a `Co-Authored-By` line.

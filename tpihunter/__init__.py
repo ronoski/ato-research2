@@ -18,6 +18,7 @@ from .agent import (AgentHunter, EnumeratorStrategist, HuntResult, HuntState,
                     LLMStrategist, Strategist)
 from .clauses import CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
+from .flaky import FlakyAdapter
 from .harness import Plan, Step, execute_action, run_plan
 from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
                      default_mints, default_mutations, run_cell)
@@ -35,6 +36,7 @@ __all__ = [
     "AgentHunter", "Strategist", "EnumeratorStrategist", "LLMStrategist",
     "HuntState", "HuntResult",
     "Cluster", "deduplicate",
+    "FlakyAdapter",
     "HuntSession",
     "RevocationMatrix", "MintSpec", "MutationSpec", "CellVerdict", "Survival",
     "default_mints", "default_mutations", "run_cell", "execute_action",
