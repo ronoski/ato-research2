@@ -161,9 +161,12 @@ class HuntSession:
     def _effects(self) -> dict:
         return {name: s.effect.value for name, s in self.specs.items()}
 
+    def _clusters(self) -> list:
+        return deduplicate(self._fired, self.attacker, self.victim, self.email,
+                           self._verdict, self.specs)
+
     def findings(self) -> dict:
-        clusters = deduplicate(self._fired, self.attacker, self.victim, self.email,
-                               self._verdict, self.specs)
+        clusters = self._clusters()
         return {
             "distinct_bugs": len(clusters),
             "probes_run": self.probes_run,
@@ -175,10 +178,28 @@ class HuntSession:
             } for cl in clusters],
         }
 
+    def report(self, fmt: str = "markdown") -> dict:
+        """A shareable, submittable evidence bundle for the distinct bugs found so far.
+        fmt: "markdown" (a document) or "json" (structured). Each bug carries steps to
+        reproduce, the canary evidence proving the takeover, the laundered proof, and
+        the remediation derived from the violated TPI clause."""
+        from .report import build_bundle, bundle_to_json, bundle_to_markdown
+        reports = build_bundle(self._clusters(), attacker=self.attacker,
+                               victim=self.victim, email=self.email,
+                               run_fn=self._run_pair, specs=self.specs)
+        if fmt == "json":
+            return {"ok": True, "format": "json", "distinct_bugs": len(reports),
+                    "content": bundle_to_json(reports)}
+        return {"ok": True, "format": "markdown", "distinct_bugs": len(reports),
+                "content": bundle_to_markdown(reports)}
+
     # -- internals ------------------------------------------------------------
-    def _verdict(self, plan):
+    def _run_pair(self, plan):
         a = MockAdapter(patched=self.patched, control=self.control)
-        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=self._effects()))[0]
+        return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim, effects=self._effects()))
+
+    def _verdict(self, plan):
+        return self._run_pair(plan)[0]
 
     def _parse(self, steps) -> tuple[Optional[tuple], Optional[str]]:
         if not isinstance(steps, list) or not steps:

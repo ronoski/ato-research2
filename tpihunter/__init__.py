@@ -20,6 +20,7 @@ from .clauses import CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
 from .harness import Plan, Step, run_plan
 from .mcp_tools import HuntSession
+from .report import Report, build_bundle, build_report, bundle_to_json, bundle_to_markdown, make_run_fn
 from .oracle import AtoOracle, Evidence, Severity, Verdict
 from .types import Channel, Identifier, Observation, Principal, ProofEvent, TrustLevel
 
@@ -33,6 +34,7 @@ __all__ = [
     "HuntState", "HuntResult",
     "Cluster", "deduplicate",
     "HuntSession",
+    "Report", "build_report", "build_bundle", "bundle_to_markdown", "bundle_to_json", "make_run_fn",
     "CLAUSES", "FailureMode",
     "Plan", "Step", "run_plan",
     "AtoOracle", "Evidence", "Severity", "Verdict",

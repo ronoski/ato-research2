@@ -329,6 +329,54 @@ class TestNewActionSynthesis(unittest.TestCase):
         self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
 
 
+class TestReport(unittest.TestCase):
+    def _session_with_bugs(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-vulnerable")
+        s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        s.run_probe([["attacker", "register"], ["victim", "reset_request"], ["victim", "reset_consume"]])
+        return s
+
+    def test_markdown_report_has_key_sections(self):
+        md = self._session_with_bugs().report("markdown")["content"]
+        for token in ("Steps to reproduce", "Evidence", "Root cause", "Remediation",
+                      "TPI-1", "TPI-4", "attacker", "victim", "canary"):
+            self.assertIn(token, md)
+        # the laundered proof (root cause) is surfaced
+        self.assertIn("P<victim", md)
+
+    def test_json_report_is_valid_and_structured(self):
+        out = self._session_with_bugs().report("json")
+        data = json.loads(out["content"])
+        self.assertEqual(data["distinct_bugs"], 2)
+        clauses = sorted(b["tpi_clause"] for b in data["bugs"])
+        self.assertEqual(clauses, ["TPI-1", "TPI-4"])
+        for b in data["bugs"]:
+            self.assertTrue(b["steps_to_reproduce"])
+            self.assertTrue(b["evidence"])
+            self.assertTrue(b["remediation"])
+            self.assertEqual(b["severity"], "takeover")
+
+    def test_build_report_reproduces_the_bug(self):
+        from tpihunter.report import build_report, make_run_fn
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        vuln = _vuln_verdict_fn(attacker, victim)
+        clusters = deduplicate(cands, attacker, victim, EMAIL, vuln)
+        run_fn = make_run_fn(lambda: MockAdapter(patched=False, control=control), attacker, victim)
+        for cl in clusters:
+            r = build_report(cl, attacker=attacker, victim=victim, email=EMAIL, run_fn=run_fn)
+            self.assertEqual(r.severity, "takeover")
+            self.assertEqual(r.clause_id, cl.clause_id)
+            self.assertTrue(r.steps and r.evidence)
+            self.assertIn("Enforce", r.to_markdown())
+
+    def test_empty_bundle_is_graceful(self):
+        from tpihunter.report import bundle_to_markdown
+        self.assertIn("No distinct bugs", bundle_to_markdown([]))
+
+
 class TestLLM(unittest.TestCase):
     def test_complete_returns_text_and_sends_opus(self):
         from tpihunter.llm import anthropic_complete

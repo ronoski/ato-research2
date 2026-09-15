@@ -15,10 +15,10 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + seven self-tests pass:
-`python3 -m unittest discover` (27 tests), and `python3 -m tpihunter.{demo,enum_demo,
-learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo}` (the live one is gated
-behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
+**Baseline (last verified green): 2026-09-15.** Test suite + eight self-tests pass:
+`python3 -m unittest discover` (31 tests), and `python3 -m tpihunter.{demo,enum_demo,
+learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo}` (the live
+one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
@@ -40,6 +40,7 @@ behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 | abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
+| report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
 
 ---
 
@@ -129,9 +130,18 @@ A relational Alloy model used **offline** to pre-compute violating interleavings
 that seed the enumerator. A design-time force-multiplier, never in the live loop.
 (Decision log below explains why Alloy is not in the loop.)
 
-### ⬜ M7 — Findings report / evidence bundle  *(unclaimed)*
-Turn a `Verdict` + `Trace` into a shareable repro (minimal steps, the laundered
-proof, the canary evidence) — a bug-bounty-ready artifact.
+### ✅ M7 — Findings report / evidence bundle  *(done 2026-09-15, session 3)*
+Turn each distinct bug (a dedup `Cluster`) into a shareable, submittable report.
+- Files: `report.py` (`build_report`/`build_bundle`, `Report.to_markdown`/`.to_dict`,
+  `make_run_fn`, `bundle_to_markdown`/`bundle_to_json`), `report_demo.py`;
+  `HuntSession.report(fmt)` + a `report` MCP tool; helpful notes added to the mock's
+  reset flow so repro steps read cleanly.
+- Each report re-runs the minimal repro to capture the full `Trace`+`Verdict`, then
+  assembles: title, severity, numbered steps-to-reproduce (with per-step proof), the
+  canary evidence that *proves* the takeover, the laundered proof (root cause), the
+  violated TPI clause, and remediation derived from the clause statement.
+- Target-agnostic by the same injected-execution pattern (`run_fn(plan)->(Verdict,Trace)`);
+  a real target (M4) reuses it unchanged. +5 tests (suite 31), 8 demos.
 
 ### ✅ M8 — Agent control loop + strategy seam  *(done 2026-09-15)*
 Recast probe generation as a pluggable **strategy** so an agent can drive the loop.
@@ -194,21 +204,21 @@ on the owner's **Claude Max 20x subscription** instead of pay-per-token API bill
 ## Pick this up next
 
 North star is **agent as hunter** — reachable on the owner's **Max subscription** via the
-MCP server (M10), and the agent can now extend its own alphabet (M11). The mock loop is
-complete; the frontier is **real targets**. In priority order:
+MCP server (M10), the agent extends its own alphabet (M11), and findings render as
+submittable reports (M7). The whole mock loop is complete end-to-end; the frontier is
+**real targets**. In priority order:
 
 1. **M4 — real `TargetAdapter`.** The big one: implement `TargetAdapter` (and, for the
    MCP path, a real-target `HuntSession`) against an authorized live app — one `httpx`
    client per principal, real flows, a real mailbox channel. Then the whole stack (MCP
-   agent on Max, new-action synthesis, learner, dedup) runs against something real.
-   **Blocked on an authorized target from the owner** — see Scope in `README.md`.
-2. **M7 — evidence bundle.** Turn each `findings()` bug into a shareable report
-   (markdown/JSON) with the full repro trace + canary evidence — the agent's report step.
-3. **Robustness for real targets:** rate-limit/backoff in the adapter, non-determinism
-   handling in the oracle (retry a suspect verdict), and a param model richer than
-   email-only for synthesized actions.
-
-Small open: **W-method conformance oracle** for the learner (soundness within a bound).
+   agent on Max, new-action synthesis, learner, dedup, report) runs against something real.
+   **Blocked on an authorized target from the owner** — see Scope in `README.md`; ask for
+   one. Everything downstream reuses the injected-execution pattern unchanged.
+2. **Robustness for real targets** (do-able now, de-risks M4): rate-limit/backoff in the
+   adapter, non-determinism handling in the oracle (retry a suspect verdict), and a param
+   model richer than email-only for synthesized actions (needed for magic-link codes, org
+   invites, aliasing).
+3. **W-method conformance oracle** for the learner (soundness within a bound).
 
 ---
 
@@ -239,6 +249,16 @@ Small open: **W-method conformance oracle** for the learner (soundness within a 
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (third contributor).* **M7 done: evidence bundle.** Added
+  `report.py` — turns each distinct bug (dedup `Cluster`) into a submittable report by
+  re-running its minimal repro to capture the full `Trace`+`Verdict`, then rendering steps
+  to reproduce, the canary evidence proving the takeover, the laundered proof (root cause),
+  and remediation from the violated TPI clause. `Report.to_markdown()`/`.to_dict()`,
+  bundle helpers, `HuntSession.report(fmt)` + a `report` MCP tool, `report_demo.py`. Kept
+  it target-agnostic via an injected `run_fn`. Also added clean repro notes to the mock's
+  reset flow. +5 tests (suite 31), 8 demos, import isolation intact. **Next: M4 — real
+  `TargetAdapter`** (still blocked on an authorized target), or the robustness items that
+  de-risk it.
 - **2026-09-15** — *End of shift — handing to the third contributor.* The mock loop is
   complete end-to-end (M0–M11): theory → oracle → two-principal adapter → learner →
   synthesis → enumerator → dedup → agent control loop → live via the API strategist *and*

@@ -33,9 +33,9 @@ a minimal repro, and the exact TPI clause violated.
 
 Today the full loop is built and **self-validating against a mock**: oracle, dedup, the
 agent control seam, a live strategist both via the API (M9) and via the Claude Code agent
-on the owner's Max subscription (M10, the MCP server), and the agent extending its own
-alphabet (M11). The remaining frontier is **real targets** (M4) and **shareable reports**
-(M7).
+on the owner's Max subscription (M10, the MCP server), the agent extending its own alphabet
+(M11), and submittable evidence reports (M7). The remaining frontier is **real targets**
+(M4) and the robustness that de-risks them.
 
 **Read the theory first:** open `paper/provenance.html` in a browser. It defines the
 invariant, the three failure modes (gap / forgery / laundering), the
@@ -50,7 +50,7 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 Run the test suite and the seven self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 27 tests: the invariants that must not regress
+python3 -m unittest discover     # 31 tests: the invariants that must not regress
 python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
@@ -58,6 +58,7 @@ python3 -m tpihunter.synth_demo   # the closed loop: learn → synthesize action
 python3 -m tpihunter.agent_demo   # agent as hunter: a strategist drives the loop (enumerator vs LLM seam)
 python3 -m tpihunter.live_agent_demo  # the real LLM strategist (gated by TPIHUNTER_LIVE=1; else prints setup)
 python3 -m tpihunter.newaction_demo   # the agent registers a new action to find a bug beyond the alphabet
+python3 -m tpihunter.report_demo      # hunt the mock, then print the submittable evidence bundle
 ```
 
 Then read, in this order:
@@ -69,7 +70,7 @@ Then read, in this order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
    `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
    `dedup.py` → `sul.py` → `learner.py` → `synthesis.py` → `agent.py` →
-   `mcp_tools.py` → `mcp_server.py` → `llm.py`
+   `mcp_tools.py` → `mcp_server.py` → `llm.py` → `report.py`
 
    `agent.py` (and `mcp_tools.py`, its MCP twin) is where it all comes together for the
    goal — read them last but treat them as the top of the design: everything else is a
@@ -102,6 +103,7 @@ The loop the project implements:
 | `llm.py` | real-model backend for `LLMStrategist` (isolates `anthropic`; API/pay-per-token path) |
 | `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib, tested) |
 | `mcp_server.py` | MCP server so the Claude Code agent hunts on a Max plan (isolates `mcp`) |
+| `report.py` | evidence bundles — each distinct bug → submittable markdown/JSON report |
 | `sul.py` | System-Under-Learning interface + single-account view of the mock |
 | `learner.py` | Angluin's L* Mealy learner (black-box automata learning) |
 | `synthesis.py` | learned machine → the enumerator's `ActionSpec` model (closes the loop) |
@@ -153,9 +155,9 @@ invitations to improve:
   machine can be incomplete for larger alphabets. A W-method / Wp-method conformance oracle
   would make it sound within a bound. *(Still open.)*
 - **Tests are the safety net — extend them with every change.** `tests/test_tpihunter.py`,
-  stdlib `unittest`, **27 tests** covering the load-bearing invariant, the learn→synthesize
-  pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`, and
-  new-action synthesis. Add assertions for whatever you build.
+  stdlib `unittest`, **31 tests** covering the load-bearing invariant, the learn→synthesize
+  pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`,
+  new-action synthesis, and the report bundle. Add assertions for whatever you build.
 
 ---
 
@@ -170,29 +172,30 @@ invitations to improve:
   (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
   never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
   `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
-- **`unittest discover` and all seven demos stay green.** Don't hand back on red.
+- **`unittest discover` and all eight demos stay green.** Don't hand back on red.
 
 ---
 
 ## 6. Your next task
 
-The mock loop is complete: live via the API strategist (M9) and via the Claude Code agent
-on a Max subscription (M10, the owner's path), and the agent can extend its own alphabet
-(M11). The frontier is **real targets**. From `STATUS.md` → *Pick this up next*:
+The mock loop is complete end-to-end: live via the API strategist (M9) and the Claude Code
+agent on a Max subscription (M10, the owner's path), the agent extends its own alphabet
+(M11), and findings render as submittable reports (M7). The frontier is **real targets**.
+From `STATUS.md` → *Pick this up next*:
 
 1. **M4 — real `TargetAdapter` (the big one).** Implement `TargetAdapter` (and a
    real-target `HuntSession`) against an authorized live app: one `httpx` client per
    principal, real register/login/sso/reset flows, a real mailbox channel
    (`channels.EmailChannel`), and the oracle surface (`whoami` + a private per-account
-   resource for the canary). Then the whole stack runs against something real.
-   **Blocked on an authorized target from the owner** — see Scope in `README.md`; do not
-   point at anything without written authorization.
-2. **M7 — evidence bundle.** Turn each `findings()` bug (or dedup `Cluster`) into a
-   shareable report; `run_plan(build_plan(cluster.representative, …))` gives the full
-   `Trace` + `Verdict` for the repro.
-3. **Robustness for real targets:** adapter rate-limit/backoff, oracle retry on a suspect
-   verdict (real targets are noisy), and a richer param model for synthesized actions
-   (currently email-only).
+   resource for the canary). Then the whole stack — agent, new-action synthesis, dedup,
+   report — runs against something real. **Blocked on an authorized target from the
+   owner** — see Scope in `README.md`; do not point at anything without written
+   authorization. *Ask the owner for a target before starting.*
+2. **Robustness for real targets** (do-able now against the mock, de-risks M4): adapter
+   rate-limit/backoff, oracle retry on a suspect verdict (real targets are noisy), and a
+   richer param model for synthesized actions — currently `_to_plan` gives a new action
+   only `{"email": …}`, so codes / invite tokens / second identifiers can't be passed yet.
+3. **W-method conformance oracle** for the learner (soundness within a bound).
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).
@@ -201,7 +204,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all seven demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all eight demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -218,4 +221,4 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
 - Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
 - `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis. Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle. Each shift is one or more commits ending with a `Co-Authored-By` line.

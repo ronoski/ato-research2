@@ -78,6 +78,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
 | `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib) |
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
+| `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
@@ -85,6 +86,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `agent_demo.py` | self-test of the agent loop (enumerator vs a fake-LLM strategist) |
 | `live_agent_demo.py` | the real LLM strategist on the mock (gated by `TPIHUNTER_LIVE=1`) |
 | `newaction_demo.py` | the agent registering a new action to find a bug beyond the alphabet |
+| `report_demo.py` | hunt the mock, then print the submittable evidence bundle |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -207,6 +209,22 @@ Supporting this required an effect-based oracle diagnosis (new verbs classify), 
 harness dispatch, and a trigger-aware dedup signature (a bug via a new verb is a distinct
 finding). Registration never mutates the global alphabet.
 
+## Reporting findings — the evidence bundle
+
+Once bugs are found, `report.py` turns each distinct one into a shareable, submittable
+report (`HuntSession.report(fmt)` / the `report` MCP tool, or `build_bundle(...)` directly):
+
+```
+python3 -m tpihunter.report_demo
+```
+
+It re-runs each bug's minimal repro to capture the full `Trace`+`Verdict`, then renders —
+in markdown or JSON — the title, severity, numbered **steps to reproduce** (with the proof
+each step emits), the **canary evidence** that proves the takeover, the **laundered proof**
+(root cause), the violated TPI clause, and **remediation** derived from the clause
+statement. Like the rest of the package it is target-agnostic: execution is an injected
+`run_fn(plan) -> (Verdict, Trace)`, so a real target (M4) reuses it unchanged.
+
 ## Automata learning
 
 `learner.py` learns the Mealy machine a target actually implements from black-box
@@ -241,11 +259,15 @@ longer trusted. Pass the result via `enumerate_plans(..., specs=synthesized)`.
 
 ## Roadmap
 
-- **Wire a real LLM strategist** (the goal): implement `complete_fn` against a real
-  model, then let the agent propose *new actions* (target-specific flows the fixed
-  alphabet lacks), not just interleave known ones.
-- **Evidence bundle**: turn each dedup `Cluster` (verdict + minimal repro + laundered
-  proof + canary evidence) into a shareable, bug-bounty-ready report.
+The mock loop is complete end-to-end (learn → synthesize → generate → judge → dedup →
+agent-driven, live via API and the Claude Code MCP agent → new-action synthesis → report).
+What's left:
+
+- **Real `TargetAdapter`** (the frontier): drive an authorized live app — one `httpx`
+  client per principal, real flows, a real mailbox channel. The whole stack then runs
+  against something real. Blocked on an authorized target.
+- **Robustness for real targets**: adapter rate-limit/backoff, oracle retry on a suspect
+  verdict, a richer param model for synthesized actions (codes, invites, aliasing).
 - **W-method conformance oracle**: replace the learner's random-walk equivalence
   check so the learned machine is sound within a bound.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*

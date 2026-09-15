@@ -176,7 +176,8 @@ class MockAdapter:
         tok = self.t.reset_request(email)
         if tok:
             self.inbox.deliver(email, f"Reset your password: http://target/reset?token={tok}")
-        return Observation(tok is not None, extracted={"token": tok})
+        return Observation(tok is not None, extracted={"token": tok},
+                           note=f"{p} requested a password reset for {email} (token emailed)")
 
     def reset_consume(self, p: Principal, email: str, new_password: str) -> Observation:
         if not self._controls(p, email):
@@ -187,7 +188,8 @@ class MockAdapter:
         if tok:
             self.sess[p.name] = tok
         proof = ProofEvent(p, Identifier("email", email), Channel.EMAIL)
-        return Observation(tok is not None, identity=aid, proof=proof)
+        return Observation(tok is not None, identity=aid, proof=proof,
+                           note=f"{p} consumed the reset token from the {email} inbox and set a new password")
 
     def logout(self, p: Principal) -> Observation:
         self.sess[p.name] = None

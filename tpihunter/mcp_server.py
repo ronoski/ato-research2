@@ -67,6 +67,14 @@ def build_server():
         return session.findings()
 
     @server.tool()
+    def report(fmt: str = "markdown") -> dict:
+        """A shareable, submittable evidence bundle for the distinct bugs found so far.
+        fmt: "markdown" (a document to paste into a report) or "json" (structured). Each
+        bug carries steps to reproduce, the canary evidence proving the takeover, the
+        laundered proof (root cause), and remediation from the violated TPI clause."""
+        return session.report(fmt)
+
+    @server.tool()
     def reset(target: str = "mock-vulnerable") -> dict:
         """Start a fresh hunt session. target: "mock-vulnerable" or "mock-patched"
         (use the patched one to confirm a bug closes under the fix)."""
