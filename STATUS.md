@@ -8,8 +8,9 @@
 Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 [`paper/provenance.html`](paper/provenance.html)).
 
-**Baseline (last verified green): 2026-09-15.** Both self-tests pass:
-`python3 -m tpihunter.demo` and `python3 -m tpihunter.enum_demo`.
+**Baseline (last verified green): 2026-09-15.** Three self-tests pass:
+`python3 -m tpihunter.demo`, `python3 -m tpihunter.enum_demo`,
+`python3 -m tpihunter.learn_demo`.
 
 ---
 
@@ -27,7 +28,7 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 | judge | `AtoOracle` — the verdict engine | ✅ done (M1) |
 | execute | `TargetAdapter` (two-principal) + mock | ✅ done (M1); real target = M4 |
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
-| abstract (auto) | learn alphabet + FSM from a live target | 🔜 **NEXT (M3)** |
+| abstract (auto) | learn alphabet + FSM from a target (L*) | 🚧 in progress (M3) |
 
 ---
 
@@ -70,18 +71,19 @@ Generates two-principal interleavings, pruned by the composition-relevance filte
 - Accept: `enum_demo` finds TPI-1 **and** TPI-4 with no hand-written probe; all
   findings close under patch.
 
-### 🔜 M3 — Automata learning  *(NEXT — unclaimed)*
+### 🚧 M3 — Automata learning  *(IN PROGRESS — core landed 2026-09-15)*
 Learn the alphabet and the per-subsystem Mealy machine from a **black-box** target
 (active learning, L*/LearnLib-style) so the enumerator runs on the behaviour the
 server *actually* implements, not the hand-coded `ACTIONS` table in `enumerator.py`.
-- **Start here:** define a `SUL` interface (`reset()`, `step(input) -> output`)
-  wrapping a `TargetAdapter` for a single account; implement an L* Mealy learner
-  with a random-walk equivalence oracle; demo it recovering the mock's login/reset
-  FSM (e.g. that `reset_consume` only works after `reset_request`).
-- **Then:** feed the learned alphabet + effect classification into the enumerator,
-  replacing the static `ACTIONS` specs.
-- Accept: a `learn_demo` that prints the inferred state machine for the mock, and
-  the enumerator consuming it.
+- [x] `SUL` interface (`reset()`, `step(input) -> output`) — `sul.py`
+- [x] L* Mealy learner + random-walk equivalence oracle — `learner.py`
+- [x] `learn_demo` recovers the mock's 5-state login/reset FSM (RESET_USE only
+      yields a session after RESET_REQ; LOGIN denied until an account exists)
+- [ ] **remaining:** feed the learned alphabet + an effect classification into the
+      enumerator, replacing the static `ACTIONS` specs (needs a heuristic to label
+      learned transitions as SEED / RAISE / CRED from their output signature).
+- Accept (remaining): `enumerator` consumes a learned machine and reproduces the
+  M2 findings without the hand-coded action table.
 
 ### ⬜ M4 — Real `TargetAdapter`  *(unclaimed)*
 Implement `TargetAdapter` against a live app: one `httpx` client per principal, real
@@ -110,9 +112,13 @@ proof, the canary evidence) — a bug-bounty-ready artifact.
 
 ## Pick this up next
 
-**M3 (automata learning).** It is the highest-leverage unclaimed task and unblocks
-running the enumerator against real behaviour. Start with the `SUL` interface and a
-small L* Mealy learner (stdlib only), validated on the mock. See M3 above.
+Two ready tasks:
+1. **Finish M3** — wire the learned Mealy machine into the enumerator. Add a
+   classifier that labels each learned transition SEED / RAISE / CRED from its
+   output signature, then have `enumerate_plans` take an alphabet derived from a
+   learned machine. This closes the loop: generation from *learned* behaviour.
+2. **M5 (semantic dedup)** — independent of M3; collapses the enumerator's 106
+   near-duplicate findings to ~2 distinct ones. Good parallel task.
 
 ---
 
@@ -138,6 +144,10 @@ small L* Mealy learner (stdlib only), validated on the mock. See M3 above.
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — M3 core: black-box automata learning landed (`sul.py`,
+  `learner.py`, `learn_demo.py`). L* recovers the mock's 5-state auth FSM in 542
+  membership queries. Remaining M3 sub-task: feed the learned machine into the
+  enumerator. All three self-tests green.
 - **2026-09-15** — Repo initialized. M0 (thesis), M1 (oracle + adapter), M2
   (enumerator) landed and green. Mock hardened with a channel-control model and a
-  completed patch (register cannot attach to an existing account). M3 is next.
+  completed patch (register cannot attach to an existing account).

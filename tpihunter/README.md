@@ -70,8 +70,11 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `mock_target.py` | a deliberately vulnerable in-memory target + its adapter |
 | `probes.py` | hand-written TPI probe plans |
 | `enumerator.py` | **generates** probe plans — composition-relevant interleavings |
+| `sul.py` | System-Under-Learning interface + a single-account view of the mock |
+| `learner.py` | L* Mealy-machine learner (black-box automata learning) |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
+| `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
 
 ## Hunting a real target
 
@@ -111,11 +114,24 @@ with no hand-written probe, finds a distinct one (**TPI-4**, session survives a
 victim's password reset). Every finding closes under the patch — the enumerator
 proposes, the oracle disposes.
 
+## Automata learning
+
+`learner.py` learns the Mealy machine a target actually implements from black-box
+queries (Angluin's L* + a random-walk equivalence oracle):
+
+```
+python3 -m tpihunter.learn_demo
+```
+
+Against the mock it recovers a 5-state auth FSM — session (logged-in / -out) and
+reset-token-outstanding dimensions and all — from ~540 membership queries. Wrap a
+real target in the `SUL` interface (`reset()`, `step`) to learn *its* machine.
+
 ## Roadmap
 
-- **Automata learning** (next): learn the alphabet and the per-subsystem state
-  machine from a *live* target (LearnLib / L*), so the enumerator runs on the
-  behaviour the server really implements rather than an assumed action set.
+- **Wire learning into generation** (finishing M3): map learned transitions to the
+  enumerator's effect classes so generation runs on learned behaviour, not the
+  static `ACTIONS` table.
 - **Semantic dedup**: the enumerator currently over-generates order/padding
   variants (124 candidates, 2 distinct bugs); collapse plans by causal signature.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*

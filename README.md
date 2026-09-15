@@ -21,6 +21,7 @@ This repo has two halves:
 ```bash
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes, rediscovers TPI-1 and finds TPI-4
+python3 -m tpihunter.learn_demo  # automata learning: recovers the target's auth state machine (L*)
 ```
 
 Stdlib-only; no `pip install`.
