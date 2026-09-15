@@ -213,3 +213,11 @@ def is_wellformed(merged: tuple[tuple[str, str], ...],
                   specs: Optional[dict[str, ActionSpec]] = None) -> bool:
     """True if every action's ordering preconditions are met in `merged`."""
     return _wellformed(merged, specs if specs is not None else ACTIONS)
+
+
+def make_candidate(merged: tuple[tuple[str, str], ...], attacker: Principal,
+                   victim: Principal, email: str,
+                   specs: Optional[dict[str, ActionSpec]] = None) -> Candidate:
+    """Build a full Candidate (plan + classification) from a (role, action)
+    interleaving — used by a strategist that proposes probes directly."""
+    return _to_plan(merged, attacker, victim, email, specs if specs is not None else ACTIONS)

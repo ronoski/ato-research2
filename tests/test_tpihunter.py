@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import unittest
 
+import json
+
+from tpihunter.agent import AgentHunter, EnumeratorStrategist, HuntState, LLMStrategist
 from tpihunter.dedup import build_plan, deduplicate
 from tpihunter.enumerator import ACTIONS, enumerate_plans
 from tpihunter.harness import run_plan
@@ -161,6 +164,51 @@ class TestSynthesis(unittest.TestCase):
         _n, fired, patch_gaps = _enumerate(specs=specs)
         self.assertEqual(sorted(set(fired)), ["TPI-1", "TPI-4"])
         self.assertEqual(patch_gaps, 0)
+
+
+def _adapter_factory(victim):
+    control = {victim.name: {EMAIL}}
+    return lambda: MockAdapter(patched=False, control=control)
+
+
+def _two_probes(_prompt):
+    return json.dumps([
+        {"steps": [["attacker", "register"], ["victim", "sso_login"]]},
+        {"steps": [["attacker", "register"], ["victim", "reset_request"], ["victim", "reset_consume"]]},
+    ])
+
+
+class TestAgent(unittest.TestCase):
+    def test_enumerator_strategist_finds_two_bugs(self):
+        attacker, victim = _principals()
+        hunter = AgentHunter(_adapter_factory(victim), attacker, victim, EMAIL, budget=300)
+        res = hunter.hunt(EnumeratorStrategist())
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+
+    def test_llm_strategist_finds_two_bugs_in_two_probes(self):
+        attacker, victim = _principals()
+        hunter = AgentHunter(_adapter_factory(victim), attacker, victim, EMAIL, budget=300)
+        res = hunter.hunt(LLMStrategist(_two_probes, max_rounds=1))
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+        self.assertEqual(res.probes_used, 2)   # the agent adapts instead of brute-forcing
+
+    def test_prompt_contains_contract(self):
+        attacker, victim = _principals()
+        state = HuntState(ACTIONS, attacker, victim, EMAIL, budget=10)
+        prompt = LLMStrategist(_two_probes).render_prompt(state)
+        for token in ("TPI-1", "register", "sso_login", "attacker", "victim"):
+            self.assertIn(token, prompt)
+
+    def test_parse_rejects_unknown_and_malformed(self):
+        attacker, victim = _principals()
+        state = HuntState(ACTIONS, attacker, victim, EMAIL, budget=10)
+        strat = LLMStrategist(_two_probes)
+        good = strat.parse_proposals(
+            '[{"steps": [["attacker","register"],["victim","sso_login"]]}]', state)
+        self.assertEqual(good, [(("attacker", "register"), ("victim", "sso_login"))])
+        # unknown action dropped -> empty; malformed text -> empty
+        self.assertEqual(strat.parse_proposals('[{"steps": [["attacker","nope"]]}]', state), [])
+        self.assertEqual(strat.parse_proposals("not json at all", state), [])
 
 
 if __name__ == "__main__":

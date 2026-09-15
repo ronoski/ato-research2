@@ -11,20 +11,27 @@ but read the *Decisions log* in `STATUS.md` before reopening a settled trade-off
 
 ## 1. The goal (north star)
 
-Build an **autonomous account-takeover hunter** grounded in one theory:
-**Trust-Provenance Integrity (TPI)**. The thesis: the worst ATO / auth-bypass bugs
-are not reachability faults in a login flow, they are **provenance failures** that
+Build an **autonomous AI agent that hunts account-takeover bugs** — grounded in one
+theory: **Trust-Provenance Integrity (TPI)**. The thesis: the worst ATO / auth-bypass
+bugs are not reachability faults in a login flow, they are **provenance failures** that
 only appear when two principals interleave over a shared identity store.
 
 > Trust levels compose; provenance does not.
 
-**Success looks like:** point the loop at an *authorized* real target and have it
-(1) drive two principals (attacker + victim) through the auth flows, (2) detect when
-the attacker gains access only the victim should have, and (3) report each finding
-with a verdict, a minimal repro, and the exact TPI clause violated.
+**★ The goal is AGENT AS HUNTER (owner-confirmed).** The deterministic pieces (adapter,
+oracle, harness, dedup) are the agent's **tools + ground truth**; probe generation is a
+**strategy**. The mechanical enumerator is only the baseline strategist — the real
+target is an **LLM strategist** that adapts. Weigh every task by whether it moves us
+toward a live agent driving the loop.
 
-Today that is fully built and **self-validating against a mock**. The remaining work
-is to harden it, wire in learned behaviour, and connect it to real targets.
+**Success looks like:** an agent, pointed at an *authorized* target, (1) drives two
+principals (attacker + victim) through the auth flows, (2) detects when the attacker
+gains access only the victim should have, and (3) reports each finding with a verdict,
+a minimal repro, and the exact TPI clause violated.
+
+Today the loop, the dedup, and the **agent control seam** are built and
+**self-validating against a mock**. The remaining work is to wire a real model into the
+strategist (M9), connect it to real targets (M4), and report findings (M7).
 
 **Read the theory first:** open `paper/provenance.html` in a browser. It defines the
 invariant, the three failure modes (gap / forgery / laundering), the
@@ -54,7 +61,10 @@ Then read, in this order:
 4. **the code**, in dependency order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
    `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
-   `dedup.py` → `sul.py` → `learner.py` → `synthesis.py`
+   `dedup.py` → `sul.py` → `learner.py` → `synthesis.py` → `agent.py`
+
+   `agent.py` is where it all comes together for the goal — read it last but treat it
+   as the top of the design: everything else is a tool the agent (strategist) drives.
 
 ---
 
@@ -79,6 +89,7 @@ The loop the project implements:
 | `probes.py` | hand-written TPI probe plans |
 | `enumerator.py` | **generates** probes — composition-relevant interleavings; takes a `specs` model |
 | `dedup.py` | collapses fired findings to distinct bugs (causal minimization + signature) |
+| `agent.py` | **the goal**: `AgentHunter` loop + `Strategist` seam (enumerator baseline, LLM seam) |
 | `sul.py` | System-Under-Learning interface + single-account view of the mock |
 | `learner.py` | Angluin's L* Mealy learner (black-box automata learning) |
 | `synthesis.py` | learned machine → the enumerator's `ActionSpec` model (closes the loop) |
@@ -146,23 +157,29 @@ as invitations to improve:
   proves it on the mock, and a test that asserts it.
 - **Stdlib-only** unless there is a strong reason (a real HTTP adapter will want
   `httpx` — that's fine; isolate it so the core stays dependency-free).
-- **`unittest discover` and all four demos stay green.** Don't hand back on red.
+- **`unittest discover` and all five demos stay green.** Don't hand back on red.
 
 ---
 
 ## 6. Your next task
 
-The black-box loop is closed and deduplicated (learn → synthesize → generate → judge
-→ dedup). From `STATUS.md` → *Pick this up next*, the best pick is:
+The loop is closed, deduplicated, and now driven by a pluggable strategist
+(`AgentHunter`). The north star is **agent as hunter**. From `STATUS.md` → *Pick this
+up next*:
 
-1. **M7 (evidence bundle)** — turn each dedup `Cluster` into a shareable, bug-bounty-
-   ready report. `dedup.deduplicate(...)` already hands you the distinct bugs, each
-   with a minimal repro (`cluster.representative`), the clause, and the laundered
-   proof; `run_plan` on `build_plan(cluster.representative, …)` gives you the full
-   `Trace` + `Verdict` with canary evidence. Render one report per cluster
-   (markdown + JSON). Needs no new target. Add a test that a bundle is produced per
-   distinct bug.
-2. **M4 (real adapter)** — blocked on an authorized target from the human.
+1. **M9 — wire a real LLM strategist (the goal).** `agent.LLMStrategist` already builds
+   the prompt (`render_prompt`) and parses proposals; it just needs a real
+   `complete_fn(prompt:str) -> str`. Keep the model client behind an optional import so
+   the core stays stdlib-only. Validate on the mock (the agent should find both bugs
+   from the prompt within a small budget). **Owner decision first:** which model/runtime,
+   and MCP-server vs. in-process `complete_fn` — ask before building the integration.
+   Second half: let the strategist propose *new* `ActionSpec`s (flows the fixed alphabet
+   lacks), feeding straight into generation.
+2. **M7 (evidence bundle)** — turn each dedup `Cluster` into a shareable report; needs no
+   target, and it is the agent's final "report" step. `dedup.deduplicate(...)` gives the
+   distinct bugs + minimal repros; `run_plan(build_plan(cluster.representative, …))`
+   gives the full `Trace` + `Verdict`.
+3. **M4 (real adapter)** — blocked on an authorized target from the owner.
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).
@@ -171,7 +188,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all four demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all five demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff

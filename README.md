@@ -19,11 +19,12 @@ This repo has two halves:
 ## Quickstart
 
 ```bash
-python3 -m unittest discover     # regression suite (9 tests, stdlib only)
+python3 -m unittest discover     # regression suite (16 tests, stdlib only)
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
-python3 -m tpihunter.enum_demo   # the enumerator: generates probes, rediscovers TPI-1 and finds TPI-4
+python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo  # automata learning: recovers the target's auth state machine (L*)
 python3 -m tpihunter.synth_demo  # the closed loop: learn → synthesize action model → enumerate
+python3 -m tpihunter.agent_demo  # agent as hunter: a strategist drives the loop (enumerator vs LLM seam)
 ```
 
 Stdlib-only; no `pip install`.

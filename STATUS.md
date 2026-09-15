@@ -8,18 +8,25 @@
 Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 [`paper/provenance.html`](paper/provenance.html)).
 
-**Baseline (last verified green): 2026-09-15.** Test suite + four self-tests pass:
-`python3 -m unittest discover` (12 tests), and
-`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo}`.
+**★ North star (owner-confirmed): AGENT AS HUNTER.** The end goal is an autonomous
+AI agent that hunts TPI account-takeover bugs. The deterministic pieces (adapter,
+oracle, harness, dedup) are the agent's **tools + ground truth**; probe generation is
+a **strategy**. The mechanical enumerator is just the *baseline* strategist — the real
+target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
+live agent driving the loop?*
+
+**Baseline (last verified green): 2026-09-15.** Test suite + five self-tests pass:
+`python3 -m unittest discover` (16 tests), and
+`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo,agent_demo}`.
 
 ---
 
 ## The loop, and where each stage stands
 
 ```
-   map ──► abstract ──► generate ──► EXECUTE ──► JUDGE ──► refine
- (recon)  (TPI terms)  (probes)     (adapter)   (oracle)
-   M4        M1/M3        M2           M1/M4       M1
+        ┌──────────────── AGENT (strategist) ────────────────┐
+   map ─►│ abstract ──► generate ──► EXECUTE ──► JUDGE ──► refine │─► report
+ (recon) └  (TPI)      (probes)     (adapter)   (oracle)   (dedup) ┘
 ```
 
 | stage | component | status |
@@ -30,6 +37,7 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
 | abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
+| **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); real LLM = M9 |
 
 ---
 
@@ -123,21 +131,52 @@ that seed the enumerator. A design-time force-multiplier, never in the live loop
 Turn a `Verdict` + `Trace` into a shareable repro (minimal steps, the laundered
 proof, the canary evidence) — a bug-bounty-ready artifact.
 
+### ✅ M8 — Agent control loop + strategy seam  *(done 2026-09-15)*
+Recast probe generation as a pluggable **strategy** so an agent can drive the loop.
+- Files: `agent.py` (`AgentHunter`, `HuntState`, `Strategist`, `EnumeratorStrategist`,
+  `LLMStrategist`), `agent_demo.py`; `make_candidate` in `enumerator.py`.
+- `AgentHunter.hunt(strategist)` loops: propose → execute (harness) → judge (oracle) →
+  feed back → dedup. Target-agnostic via an `adapter_factory`.
+- `EnumeratorStrategist` = the mechanical enumerator as a (non-adaptive) baseline.
+- `LLMStrategist(complete_fn)` = the agent seam: `render_prompt(state)` (TPI briefing +
+  known alphabet + history) → `complete_fn` (prompt→text, INJECTED, no hard LLM dep) →
+  `parse_proposals`. Fully runnable/testable with a fake completion.
+- Accept: `agent_demo` finds the same 2 bugs via both strategies; the fake-LLM agent
+  does it in **2 probes vs the enumerator's 124** — the adapt-don't-brute-force point.
+
+### 🔜 M9 — Wire a real LLM strategist  *(NEXT — the north-star task, unclaimed)*
+Replace the fake `complete_fn` with a real model call so the loop is a live agent.
+- **Start:** implement one `complete_fn(prompt:str)->str` calling a model (keep it a
+  thin, isolated adapter — the core stays stdlib/dep-free; put the client behind an
+  optional import). Validate on the mock: the agent should find both bugs within a
+  small budget, driven by `render_prompt` alone.
+- **Then (the real leverage):** let the strategist **propose new actions**, not just
+  interleave known ones — a real target has flows the fixed alphabet lacks (magic
+  links, device pairing, org invites, email aliasing). Extend `HuntState`/prompt so
+  the model can return new `ActionSpec`s that feed straight into generation.
+- **Decision needed from owner:** which model/runtime, and whether to expose the tools
+  as an MCP server vs. an in-process `complete_fn`. See *Pick this up next*.
+- Accept: a live agent finds both mock bugs from the prompt with no probe hand-coded,
+  within a stated budget; a test uses a scripted `complete_fn` (no network).
+
 ---
 
 ## Pick this up next
 
-The loop is closed end-to-end and deduplicated (learn → synthesize → generate →
-judge → dedup). Best next tasks:
-1. **M7 (findings/evidence bundle)** — turn each dedup `Cluster` (`Verdict` + minimal
-   repro `Trace` + laundered proof + canary evidence) into a shareable, bug-bounty-
-   ready report (markdown/JSON). Dedup already hands you the distinct bugs and their
-   minimal repros — this is the natural next step and needs no new target.
-2. **M4 (real `TargetAdapter`)** — needs an authorized target from the human; blocked
-   until then. When unblocked, also point the learner (`sul.py`) at the real target.
+North star is **agent as hunter** (top of this doc). The control loop + strategy seam
+now exist (M8); the agent is one `complete_fn` away from being live. In priority order:
 
-Also open (small): give the learner a **W-method conformance oracle** so the learned
-machine is sound within a bound, not just random-walk-tested.
+1. **M9 — wire a real LLM strategist** (the north-star task). Implement a real
+   `complete_fn` and validate the live agent on the mock, then let it propose *new
+   actions*. **Owner decision needed:** which model/runtime, and MCP-server vs.
+   in-process `complete_fn`. (Ask before building the integration.)
+2. **M7 — evidence bundle.** Turn each dedup `Cluster` into a shareable report. Needs
+   no target; good parallel work and feeds the agent's final "report" step.
+3. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner; also
+   point the learner (`sul.py`) at it once available.
+
+Small open: **W-method conformance oracle** for the learner (soundness within a bound);
+**new-action synthesis** so the agent can extend the alphabet (part of M9's second half).
 
 ---
 
@@ -168,6 +207,14 @@ machine is sound within a bound, not just random-walk-tested.
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **Goal confirmed by owner: AGENT AS HUNTER**,
+  and **M8 built** to serve it. Recast probe generation as a pluggable `Strategist`
+  and added `AgentHunter` (`agent.py`): the enumerator is now just the baseline
+  strategist, and `LLMStrategist(complete_fn)` is the agent seam — injectable model
+  function, no hard LLM dependency, fully testable. `agent_demo` shows a fake-LLM agent
+  finding the same 2 bugs in **2 probes vs the enumerator's 124**. +4 tests (suite 16);
+  5 demos green. **Next: M9 — wire a real LLM strategist** (owner decision needed on
+  model/runtime + MCP vs in-process; see *Pick this up next*).
 - **2026-09-15** — *Session 3.* **M5 complete: semantic dedup.** Added `dedup.py`:
   causal minimization (delta-debug each fired probe against the oracle, preserving the
   takeover + clause) → minimal repro, then group by causal signature

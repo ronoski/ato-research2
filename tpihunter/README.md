@@ -74,10 +74,12 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `sul.py` | System-Under-Learning interface + a single-account view of the mock |
 | `learner.py` | L* Mealy-machine learner (black-box automata learning) |
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
+| `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM) |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
 | `synth_demo.py` | self-test of the closed loop (learn → synthesize → enumerate) |
+| `agent_demo.py` | self-test of the agent loop (enumerator vs a fake-LLM strategist) |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -136,6 +138,30 @@ distinct bugs, driven by the authoritative oracle verdict:
 On the mock, **106 findings collapse to 2 distinct bugs** (TPI-1 in 2 steps, TPI-4 in
 3), each with a minimal repro — see the tail of `python3 -m tpihunter.enum_demo`.
 
+## Agent as hunter (the goal)
+
+The end goal is an autonomous agent driving this loop. Everything above is the agent's
+**tools + ground truth**; probe generation is a **strategy**. `agent.py` makes that
+explicit:
+
+```
+python3 -m tpihunter.agent_demo
+```
+
+- `AgentHunter.hunt(strategist)` loops: propose → execute → judge → feed back → dedup.
+  It is target-agnostic (an `adapter_factory`), so the same loop runs on the mock now
+  and a real `TargetAdapter` later.
+- `EnumeratorStrategist` is the mechanical enumerator recast as a (non-adaptive)
+  baseline strategist.
+- `LLMStrategist(complete_fn)` is the agent seam. `render_prompt(state)` hands the model
+  the TPI briefing, the known action alphabet, and the history of what it has tried;
+  `complete_fn(prompt) -> text` is **injected**, so there is no hard LLM dependency and
+  the seam is testable with a fake completion. Wire `complete_fn` to a real model to get
+  a live agent.
+
+In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumerator's
+124** — the point of agent-as-hunter: adapt, don't brute-force.
+
 ## Automata learning
 
 `learner.py` learns the Mealy machine a target actually implements from black-box
@@ -170,6 +196,9 @@ longer trusted. Pass the result via `enumerate_plans(..., specs=synthesized)`.
 
 ## Roadmap
 
+- **Wire a real LLM strategist** (the goal): implement `complete_fn` against a real
+  model, then let the agent propose *new actions* (target-specific flows the fixed
+  alphabet lacks), not just interleave known ones.
 - **Evidence bundle**: turn each dedup `Cluster` (verdict + minimal repro + laundered
   proof + canary evidence) into a shareable, bug-bounty-ready report.
 - **W-method conformance oracle**: replace the learner's random-walk equivalence
