@@ -15,8 +15,8 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + eleven self-tests pass:
-`python3 -m unittest discover` (51 tests), and `python3 -m tpihunter.{demo,enum_demo,
+**Baseline (last verified green): 2026-09-16.** Test suite + eleven self-tests pass:
+`python3 -m unittest discover` (57 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo,
 retry_demo,alias_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the
 Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
@@ -37,7 +37,7 @@ Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 | judge | `AtoOracle` — the verdict engine | ✅ done (M1) |
 | execute | `TargetAdapter` (two-principal) + mock | ✅ done (M1); real target = M4 |
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
-| abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
+| abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3); W-method conformance oracle = M15 ✓ |
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
@@ -271,6 +271,28 @@ code, an invite token, or a SECOND identifier (a recovery/secondary email) — c
 - +6 tests (suite 51), 11 demos, isolation intact. **This clears both robustness items** from
   *Pick this up next* §3; the now-doable frontier narrows to the W-method oracle and going live.
 
+### ✅ M15 — W-method conformance oracle for the learner  *(done 2026-09-16, session 4)*
+Replaced the learner's default equivalence oracle. The random-walk oracle only *samples* the
+target — it can fail to find a counterexample but never certify one's absence, so a learned
+machine could be incomplete for a larger alphabet (the last open follow-up L* limitation).
+The **W-method** (Chow 1978) instead runs a finite conformance suite that is guaranteed to
+expose any discrepancy, provided the true machine has ≤ `n + extra_states` states — soundness
+within a bound.
+- Files: `wmethod.py` (`state_cover`, `transition_cover`, `characterization_set`,
+  `w_method_suite`, `find_counterexample`, `sul_trace_factory` — a standalone, reusable
+  conformance oracle over any `Mealy` + SUL), `learner.py` (`LStar(eq_method="wmethod",
+  extra_states=2)` is now the default; `"random"` kept as the unsound fallback; `eq_count`
+  reports conformance tests), `learn_demo.py` (reports the suite size + soundness bound and
+  re-certifies at a wider margin).
+- Suite = **P · M · W**: transition cover (reach every state + every one-step extension) ×
+  middle sequences Σ^≤extra_states (the guard for not-yet-split states) × a characterization
+  set (distinguishes every state pair). Full output traces are compared, so a distinguishing
+  output at any interior position is caught; the returned counterexample is the minimal prefix.
+- Verified: on the mock it recovers the full **9-state** FSM and is **exhaustively conformant**
+  (0 mismatches over all 335,922 words up to length 7); it is certified with no counterexample
+  even at `extra_states=3`; and it *catches* both output-corrupted and structurally-corrupted
+  hypotheses (soundness in both directions). +6 tests (suite 57), 11 demos, isolation intact.
+
 ---
 
 ## Pick this up next
@@ -305,7 +327,12 @@ deferred**, not the next task. In priority order now:
    bespoke runner the *grab* toolchain can't express; ROE hard-wired (X-Bug-Bounty header,
    own-accounts-only, in-scope allowlist, preflight-gated). The revocation matrix is the
    most ROE-compatible mode to bring live first.
-5. **W-method conformance oracle** for the learner (soundness within a bound).
+5. ✅ **W-method conformance oracle** — done (M15). The learner is now sound within a state
+   bound. **What's left in this vein is empirical, not algorithmic:** tune `extra_states` on a
+   *real* learned target (the mock converges even at 0), and learn against a real SUL once M4
+   lands. The classic scaling limit stands — the suite is exponential in `extra_states` — so a
+   Wp-method / adaptive-distinguishing variant is the natural optimization if a big real
+   alphabet makes the W-method suite too large.
 
 ---
 
@@ -327,8 +354,10 @@ deferred**, not the next task. In priority order now:
   produces false merges — the fix is a finer signature, not more clusters by default.
 - Oracle diagnosis is heuristic over the black-box trace; a white-box hook could
   corroborate.
-- Learner uses a random-walk equivalence oracle (sound only up to sampling); a
-  W-method oracle would make the learned machine sound within a bound.
+- Learner default is now the **W-method** conformance oracle (M15): sound up to
+  `n + extra_states` states, not just sampled. The random-walk oracle is still selectable
+  (`eq_method="random"`) but is unsound. Remaining bound: the W-method suite is exponential
+  in `extra_states`, so a very large real alphabet may need a Wp-method / adaptive variant.
 - Temporal/TOCTOU races and freshness windows are modelled as ordering only, not yet
   as timed automata.
 
@@ -336,6 +365,18 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-16** — *Session 4 (cont) — M15: W-method conformance oracle.* Closed the last open
+  L* limitation. The random-walk equivalence oracle only samples — it can miss states, so a
+  learned machine was never certified. Added `wmethod.py`: a standalone W-method conformance
+  oracle (transition cover × Σ^≤extra_states middles × characterization set), comparing full
+  output traces and returning a minimal-prefix counterexample. Wired it as `LStar`'s default
+  (`eq_method="wmethod"`, `extra_states=2`); the random walk stays as an unsound `"random"`
+  fallback. On the mock it recovers the full 9-state FSM, is exhaustively conformant (0/335,922
+  words to length 7), certifies with no counterexample even at `extra_states=3`, and catches
+  both output- and structure-corrupted hypotheses. `learn_demo` now reports the suite size and
+  soundness bound. +6 tests (suite 57), 11 demos, isolation intact. **Next:** nothing else is
+  purely-now-doable of note — the frontier is going live (M4, owner-gated) and iterating the
+  Grab lens; W-method tuning (`extra_states`, a Wp variant) is empirical, for a real target.
 - **2026-09-15** — *Session 4 (cont) — M14: richer param model for synthesized actions.*
   Completed the sibling robustness item and, with it, new-action synthesis (M11): the agent
   could *name* a new flow but every step was email-only, so a flow needing a code, an invite

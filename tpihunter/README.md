@@ -118,7 +118,8 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `enumerator.py` | **generates** probe plans — composition-relevant interleavings |
 | `dedup.py` | collapses near-duplicate findings to distinct bugs (minimization + signature) |
 | `sul.py` | System-Under-Learning interface + a single-account view of the mock |
-| `learner.py` | L* Mealy-machine learner (black-box automata learning) |
+| `learner.py` | L* Mealy-machine learner (black-box automata learning); default equivalence oracle is the W-method |
+| `wmethod.py` | W-method conformance oracle — certifies a learned machine sound up to `n + extra_states` states |
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
 | `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM) |
 | `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
@@ -290,16 +291,20 @@ statement. Like the rest of the package it is target-agnostic: execution is an i
 ## Automata learning
 
 `learner.py` learns the Mealy machine a target actually implements from black-box
-queries (Angluin's L* + a random-walk equivalence oracle):
+queries (Angluin's L*), and by default certifies it with the **W-method** conformance
+oracle (`wmethod.py`) instead of random sampling:
 
 ```
 python3 -m tpihunter.learn_demo
 ```
 
-Against the mock it recovers a 9-state auth FSM — session, *verified* (the
-`sso_login`→`OK_VERIFIED` trust-raise), reset-token, and logged-out dimensions —
-from ~1.5k membership queries. Wrap a real target in the `SUL` interface
-(`reset()`, `step`) to learn *its* machine.
+Against the mock it recovers the full 9-state auth FSM — session, *verified* (the
+`sso_login`→`OK_VERIFIED` trust-raise), reset-token, and logged-out dimensions — from a
+few hundred membership queries, and the W-method suite (transition cover × Σ^≤k middles ×
+a characterization set) certifies it sound up to `n + extra_states` states: no
+counterexample exists within the bound, and it is exhaustively conformant on the mock. Wrap
+a real target in the `SUL` interface (`reset()`, `step`) to learn *its* machine; select the
+cheaper `eq_method="random"` oracle if the W-method suite gets too large.
 
 ## Closing the loop: learn → synthesize → generate
 
@@ -331,8 +336,9 @@ What's left:
 - **Robustness for real targets**: ✅ oracle confirmation/retry (M13) and a richer param
   model for synthesized actions — codes, invites, second identifiers (M14). Still to do:
   adapter rate-limit/backoff for the live path.
-- **W-method conformance oracle**: replace the learner's random-walk equivalence
-  check so the learned machine is sound within a bound.
+- **W-method conformance oracle**: ✅ done (M15) — the learner's default equivalence oracle
+  is now a finite conformance suite, sound up to `n + extra_states` states. A Wp-method /
+  adaptive variant would help only if a large real alphabet makes the suite too big.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*
   that pre-computes violating interleavings to seed the enumerator — a design-time
   force-multiplier, never in the live loop.

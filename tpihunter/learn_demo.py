@@ -8,9 +8,16 @@ shows that reset_consume only yields a session after a reset_request, and that
 sso_login yields a *verified* session (OK_VERIFIED) that plain register/login do
 not. This is the de Ruiter & Poll move: learn what the server really does, then
 diff against intent or feed the alphabet to synthesis + the enumerator.
+
+The equivalence oracle is the **W-method** (`wmethod.py`): instead of sampling with random
+walks (which can miss states), it runs a finite conformance suite that *certifies* the
+learned machine against the true one up to a state bound (n + extra_states). So the machine
+below is sound within that bound, and the demo re-checks it by asking for a counterexample
+at a wider margin — there is none.
 """
 from __future__ import annotations
 
+from . import wmethod
 from .learner import LStar, Mealy
 
 
@@ -30,15 +37,23 @@ def print_machine(m: Mealy) -> None:
 
 def main() -> None:
     from .sul import MockSUL
+    extra = 2
     sul = MockSUL(patched=False)
-    learner = LStar(sul, seed=1, eq_tests=1500)
+    learner = LStar(sul, eq_method="wmethod", extra_states=extra)
     machine = learner.learn()
 
-    print("\nTPI-HUNTER  -  automata learning (black-box L*)")
-    print(f"learned the mock's single-account auth FSM from {learner.mq_count} membership queries\n")
+    print("\nTPI-HUNTER  -  automata learning (black-box L*, W-method oracle)")
+    print(f"learned the mock's single-account auth FSM from {learner.mq_count} membership queries")
+    print(f"equivalence: W-method conformance suite ({learner.eq_count} tests), "
+          f"sound up to {len(machine.states)}+{extra} states\n")
     print(f"alphabet: {', '.join(machine.alphabet)}")
     print(f"states:   {len(machine.states)}  (initial: {machine.initial})\n")
     print_machine(machine)
+
+    # Certify: ask for a counterexample at a WIDER margin than we learned with — none exists.
+    ce = wmethod.find_counterexample(machine, MockSUL(patched=False), extra_states=extra + 1)
+    print(f"\n conformance re-check at extra_states={extra + 1}: "
+          f"{'counterexample ' + str(ce) if ce else 'no counterexample — CERTIFIED within the bound'}")
 
     # A few read-offs a hunter cares about.
     print("\n read-offs:")

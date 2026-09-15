@@ -187,6 +187,90 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(m.run(("register",)), "OK_SESSION")
 
 
+class TestWMethod(unittest.TestCase):
+    """The W-method equivalence oracle: soundness within a state bound — it certifies a
+    correct hypothesis (no false counterexample) AND catches any wrong one (no missed bug)."""
+
+    def _learn_wmethod(self, extra_states=2):
+        from tpihunter.learner import LStar
+        from tpihunter.sul import MockSUL
+        return LStar(MockSUL(patched=False), eq_method="wmethod",
+                     extra_states=extra_states).learn()
+
+    def test_state_cover_reaches_every_state(self):
+        from tpihunter import wmethod
+        m = self._learn_wmethod()
+        reached = set()
+        for acc in wmethod.state_cover(m):
+            s = m.initial
+            for a in acc:
+                s, _ = m.trans[(s, a)]
+            reached.add(s)
+        self.assertEqual(reached, set(m.states))
+
+    def test_characterization_set_separates_all_state_pairs(self):
+        from tpihunter import wmethod
+        m = self._learn_wmethod()
+        W = wmethod.characterization_set(m)
+        states = list(m.states)
+        for i in range(len(states)):
+            for j in range(i + 1, len(states)):
+                self.assertTrue(
+                    any(wmethod._hyp_trace(m, states[i], w) != wmethod._hyp_trace(m, states[j], w)
+                        for w in W),
+                    f"states {states[i]}/{states[j]} not separated by W")
+
+    def test_no_false_counterexample_on_correct_hypothesis(self):
+        from tpihunter import wmethod
+        from tpihunter.sul import MockSUL
+        m = self._learn_wmethod()
+        # certified even at a wider margin than it was learned with
+        self.assertIsNone(wmethod.find_counterexample(m, MockSUL(patched=False), extra_states=3))
+
+    def test_catches_corrupted_output_hypothesis(self):
+        import copy
+        from tpihunter import wmethod
+        from tpihunter.sul import MockSUL
+        m = self._learn_wmethod()
+        bad = copy.deepcopy(m)
+        (s, a) = next(iter(bad.trans))
+        ns, o = bad.trans[(s, a)]
+        bad.trans[(s, a)] = (ns, o + "_WRONG")           # corrupt an output label
+        ce = wmethod.find_counterexample(bad, MockSUL(patched=False), extra_states=0)
+        self.assertIsNotNone(ce)
+        self.assertNotEqual(bad.run(ce), self._sul_last(MockSUL(patched=False), ce))
+
+    def test_catches_corrupted_transition_target(self):
+        import copy
+        from tpihunter import wmethod
+        from tpihunter.sul import MockSUL
+        m = self._learn_wmethod()
+        bad = copy.deepcopy(m)
+        (s, a) = next(iter(bad.trans))
+        _ns, o = bad.trans[(s, a)]
+        bad.trans[(s, a)] = (bad.initial, o)             # redirect a transition (structural)
+        ce = wmethod.find_counterexample(bad, MockSUL(patched=False), extra_states=2)
+        self.assertIsNotNone(ce)
+
+    def test_learned_machine_is_exhaustively_conformant(self):
+        from itertools import product
+        from tpihunter.sul import MockSUL
+        m = self._learn_wmethod()
+        self.assertEqual(len(m.states), 9)               # the full auth FSM, not a partial one
+        sul = MockSUL(patched=False)
+        for L in range(1, 5):   # exhaustive to length 4; the certification test covers the bound
+            for w in product(m.alphabet, repeat=L):
+                self.assertEqual(m.run(w), self._sul_last(sul, w))
+
+    @staticmethod
+    def _sul_last(sul, word):
+        sul.reset()
+        out = "-"
+        for a in word:
+            out = sul.step(a)
+        return out
+
+
 class TestDedup(unittest.TestCase):
     def test_collapses_to_two_distinct_bugs(self):
         attacker, victim = _principals()

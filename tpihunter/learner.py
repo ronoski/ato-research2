@@ -1,9 +1,12 @@
-"""Angluin's L* for Mealy machines, with a random-walk equivalence oracle.
+"""Angluin's L* for Mealy machines, with a W-method (or random-walk) equivalence oracle.
 
 Learns the deterministic Mealy machine a SUL implements from:
   * membership queries  — run a word from reset, observe the last output;
-  * equivalence queries — approximated by random-walk testing (realistic for a
-    black box: we can sample the target, not prove equivalence).
+  * equivalence queries — by default the **W-method** conformance oracle (`wmethod.py`):
+    a finite test suite that *certifies* the hypothesis against the true machine up to a
+    state bound (n + `extra_states`), so the learned machine is sound within that bound —
+    unlike the random-walk oracle (`eq_method="random"`), which only samples and can miss
+    states. The random walk is kept as a cheaper, unsound fallback.
 
 This is the active-learning core of the black-box track. The recovered machine is
 the *implemented* auth state machine; diffing it against the intended one, or
@@ -35,7 +38,8 @@ class Mealy:
 
 
 class LStar:
-    def __init__(self, sul, seed: int = 0, eq_tests: int = 500, eq_maxlen: int = 14) -> None:
+    def __init__(self, sul, seed: int = 0, eq_tests: int = 500, eq_maxlen: int = 14,
+                 eq_method: str = "wmethod", extra_states: int = 2) -> None:
         self.sul = sul
         self.Sigma = list(sul.alphabet)
         self.S: list[Word] = [()]                       # access prefixes (ordered, ε first)
@@ -44,7 +48,14 @@ class LStar:
         self.rng = random.Random(seed)
         self.eq_tests = eq_tests
         self.eq_maxlen = eq_maxlen
+        # equivalence oracle: "wmethod" (conformance-tested, sound up to n+extra_states states)
+        # or "random" (random-walk sampling, unsound). extra_states is the W-method state margin.
+        self.eq_method = eq_method
+        self.extra_states = extra_states
         self.mq_count = 0
+        self.eq_count = 0                               # conformance queries the eq-oracle made
+        # a full-output-trace function over the SUL, cached across rounds (W-method only)
+        self._trace_fn = None
 
     # --- queries -------------------------------------------------------------
     def _mq(self, word: Word) -> str:
@@ -105,12 +116,27 @@ class LStar:
         return Mealy(list(name.values()), name[self._row(())], trans, list(self.Sigma), access)
 
     def _find_counterexample(self, hyp: Mealy) -> Optional[Word]:
+        if self.eq_method == "wmethod":
+            return self._find_counterexample_wmethod(hyp)
         for _ in range(self.eq_tests):
             length = self.rng.randint(1, self.eq_maxlen)
             word = tuple(self.rng.choice(self.Sigma) for _ in range(length))
             if hyp.run(word) != self._mq(word):
                 return word
         return None
+
+    def _find_counterexample_wmethod(self, hyp: Mealy) -> Optional[Word]:
+        from . import wmethod
+        if self._trace_fn is None:                     # shared cache across rounds
+            base = wmethod.sul_trace_factory(self.sul)
+
+            def counted(word):
+                self.eq_count += 1
+                return base(word)
+
+            self._trace_fn = counted
+        return wmethod.find_counterexample(hyp, self.sul, extra_states=self.extra_states,
+                                           trace_fn=self._trace_fn)
 
     def learn(self, max_rounds: int = 100) -> Mealy:
         for _ in range(max_rounds):
