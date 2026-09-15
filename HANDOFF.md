@@ -6,7 +6,7 @@ and "returning after two shifts away" both land here; either way, treat the repo
 source of truth and re-orient from it, because a lot has changed.
 
 > ⚠️ **Read [`READINESS.md`](READINESS.md) before you pick a task.** The mock loop is
-> complete (M0–M15) and self-validating, but the project is a finished *framework*, not a
+> complete (M0–M16) and self-validating, but the project is a finished *framework*, not a
 > proven *AI hunter* — and the highest-risk mistake now is spending a shift hardening the
 > mock, which has ~zero marginal value. `READINESS.md` is the honest state-of-the-project:
 > the gaps that matter, and the one decision (authorize a live target, or call the framework
@@ -24,7 +24,10 @@ The relay so far (what each shift built — see `git log` and the Changelog):
   second identifier (a recovery email), not just the account email — completing new-action
   synthesis and closing both roadmap robustness items. (Also exposed `register_action` on the
   MCP server, which was missing.) Then the **W-method conformance oracle** (M15): the learner
-  is now sound within a state bound, not just sampled — the last open L* limitation.
+  is now sound within a state bound, not just sampled — the last open L* limitation. Then
+  **agent situational awareness** (M16): per-probe reason codes, a coverage/frontier map, and a
+  principled `patience` stop — so an LLM strategist reasons about where it has looked instead of
+  brute-forcing. (Improves the agent's *scaffolding*; a real-model run still hasn't happened.)
 
 Your shift, in order: (1) get oriented, (2) review the existing work with a critical eye,
 (3) improve what needs it and continue the roadmap, (4) leave the tree green and hand back
@@ -70,10 +73,10 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 
 ## 2. Get oriented in five minutes
 
-Run the test suite and the ten self-tests — the fastest way to see what exists:
+Run the test suite and the twelve self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 57 tests: the invariants that must not regress
+python3 -m unittest discover     # 62 tests: the invariants that must not regress
 python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
@@ -85,6 +88,7 @@ python3 -m tpihunter.matrix_demo      # the revocation matrix: a 'patched' targe
 python3 -m tpihunter.report_demo      # hunt the mock, then print the submittable evidence bundle
 python3 -m tpihunter.retry_demo       # oracle confirmation: a flaky target can't flip the verdict (M13)
 python3 -m tpihunter.alias_demo       # richer params: drive a flow that needs a second identifier (M14)
+python3 -m tpihunter.coverage_demo    # agent situational awareness: reason codes, coverage, patience-stop (M16)
 ```
 
 Then read, in this order:
@@ -220,7 +224,7 @@ invitations to improve:
   (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
   never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
   `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
-- **`unittest discover` (57 tests) and all eleven demos stay green.** Don't hand back on red.
+- **`unittest discover` (62 tests) and all twelve demos stay green.** Don't hand back on red.
 
 ---
 
@@ -264,7 +268,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm `python3 -m unittest discover` and all eleven demos pass, and modules compile
+1. Confirm `python3 -m unittest discover` and all twelve demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -281,4 +285,4 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
 - Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
 - `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds → M13 oracle confirmation → M14 richer synthesized-action params → M15 W-method conformance oracle. Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds → M13 oracle confirmation → M14 richer synthesized-action params → M15 W-method conformance oracle → M16 agent situational awareness. Each shift is one or more commits ending with a `Co-Authored-By` line.

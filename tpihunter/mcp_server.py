@@ -83,6 +83,16 @@ def build_server():
         return session.findings()
 
     @server.tool()
+    def coverage() -> dict:
+        """Your map of where you have and haven't looked, so you don't waste probes: how many
+        DISTINCT bugs found, which TPI clauses have evidence, which effect-combinations you have
+        tried, and how many composition-relevant probes in the known alphabet remain UNTRIED.
+        Pair it with each run_probe `reason` (enforced=secure, move on / unbound_action=that verb
+        does not exist here / incomplete=reformulate / duplicate / new_bug) to steer efficiently
+        and to know when the surface is exhausted."""
+        return session.coverage()
+
+    @server.tool()
     def revocation_matrix() -> dict:
         """The own-account lifecycle hunt (single-principal, reversible, reads no one
         else's data). For each way of minting a session and each credential-mutating

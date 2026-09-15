@@ -580,6 +580,80 @@ class TestRicherParams(unittest.TestCase):
         self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
 
 
+class TestSituationalAwareness(unittest.TestCase):
+    """M16: the agent gets diagnostic reason codes, a coverage map, and a principled stop, so it
+    reasons about where it has looked instead of burning probes (live: requests) on settled ground."""
+
+    def _hunter(self, patched=False):
+        attacker, victim = _principals()
+        control = {victim.name: {EMAIL}}
+        return AgentHunter(lambda: MockAdapter(patched=patched, control=control),
+                           attacker, victim, EMAIL, budget=300)
+
+    def test_enumerator_reports_coverage_and_stop(self):
+        res = self._hunter().hunt(EnumeratorStrategist())
+        self.assertEqual(res.stop_reason, "strategist_stopped")
+        self.assertIsNotNone(res.coverage)
+        self.assertEqual(res.coverage.distinct_bugs, 2)
+        self.assertEqual(res.coverage.frontier_remaining, 0)      # fired the whole known space
+        self.assertEqual(sorted(res.coverage.clauses_found), ["TPI-1", "TPI-4"])
+
+    def test_patience_stops_when_a_round_adds_no_new_bug(self):
+        replies = [
+            json.dumps({"probes": [{"steps": [["attacker", "register"], ["victim", "sso_login"]]}]}),
+            json.dumps({"probes": [{"steps": [["attacker", "register"], ["attacker", "login"],
+                                              ["victim", "sso_login"]]}]}),
+            json.dumps({"probes": [{"steps": [["victim", "sso_login"], ["attacker", "register"]]}]}),
+        ]
+        box = {"i": 0}
+
+        def complete(_p):
+            r = replies[min(box["i"], len(replies) - 1)]
+            box["i"] += 1
+            return r
+        res = self._hunter().hunt(LLMStrategist(complete, max_rounds=5), patience=1)
+        self.assertEqual(res.stop_reason, "patience")
+        self.assertEqual(res.probes_used, 2)          # round 3 never runs
+        self.assertEqual(len(res.bugs), 1)
+        self.assertEqual(res.coverage.distinct_bugs, 1)
+
+    def test_reason_codes_via_huntsession(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-vulnerable")
+        self.assertEqual(s.run_probe([["attacker", "register"], ["victim", "sso_login"]])["reason"],
+                         "new_bug")
+        self.assertEqual(s.run_probe([["attacker", "register"], ["victim", "reset_request"],
+                                      ["victim", "reset_consume"]])["reason"], "new_bug")
+        # a padded second path to the SAME TPI-1 bug -> duplicate, not a new distinct bug
+        dup = s.run_probe([["attacker", "register"], ["attacker", "login"], ["victim", "sso_login"]])
+        self.assertEqual(dup["reason"], "duplicate")
+        self.assertFalse(dup["is_new_takeover"])
+        # a registered verb the target does not implement -> unbound_action
+        s.register_action("device_pair", "raise")
+        self.assertEqual(
+            s.run_probe([["attacker", "register"], ["victim", "device_pair"]])["reason"],
+            "unbound_action")
+
+    def test_enforced_reason_on_patched(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-patched")
+        r = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        self.assertEqual(r["severity"], "safe")
+        self.assertEqual(r["reason"], "enforced")     # ran fully, target revoked -> secure
+
+    def test_coverage_tool_reports_progress(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession(target="mock-vulnerable")
+        base = s.coverage()["frontier_remaining"]
+        s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+        s.run_probe([["attacker", "register"], ["victim", "reset_request"], ["victim", "reset_consume"]])
+        cov = s.coverage()
+        self.assertEqual(cov["distinct_bugs"], 2)
+        self.assertEqual(sorted(cov["clauses_found"]), ["TPI-1", "TPI-4"])
+        self.assertLess(cov["frontier_remaining"], base)   # probing consumed known-alphabet frontier
+        self.assertIn("distinct", cov["summary"])
+
+
 class TestRevocationMatrix(unittest.TestCase):
     def _factory(self, patched, revokes, **kw):
         owner = Principal("owner")

@@ -121,7 +121,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `learner.py` | L* Mealy-machine learner (black-box automata learning); default equivalence oracle is the W-method |
 | `wmethod.py` | W-method conformance oracle — certifies a learned machine sound up to `n + extra_states` states |
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
-| `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM) |
+| `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM); per-probe reason codes, a `Coverage` map, and a `patience` stop (M16) |
 | `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
 | `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib) |
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
@@ -139,6 +139,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `report_demo.py` | hunt the mock, then print the submittable evidence bundle |
 | `retry_demo.py` | oracle confirmation — a flaky target can't flip the verdict (M13) |
 | `alias_demo.py` | richer params — drive a flow that needs a second identifier (M14) |
+| `coverage_demo.py` | agent situational awareness — reason codes, coverage map, patience-stop (M16) |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -220,6 +221,15 @@ python3 -m tpihunter.agent_demo
 
 In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumerator's
 124** — the point of agent-as-hunter: adapt, don't brute-force.
+
+**Situational awareness (M16).** So the strategist can adapt *well* — not just cheaply — each
+probe comes back with a **reason** it can act on (`new_bug` / `duplicate` / `enforced` /
+`unbound_action` / `incomplete`), the loop tracks a **coverage** map (distinct bugs, clauses with
+evidence, effect-combinations tried, untried frontier), and `hunt(strategist, patience=k)` **stops
+on its own** after `k` rounds with no new distinct bug (`HuntResult.stop_reason`). The MCP surface
+mirrors this: `run_probe(...)` returns a `reason`, and `coverage()` reports progress. This is what
+keeps a live agent from spending real requests re-testing settled surface —
+`python3 -m tpihunter.coverage_demo` shows an agent stopping itself after 5 probes.
 
 ### Two ways to make the strategist real
 

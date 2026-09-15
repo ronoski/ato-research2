@@ -15,11 +15,11 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-16.** Test suite + eleven self-tests pass:
-`python3 -m unittest discover` (57 tests), and `python3 -m tpihunter.{demo,enum_demo,
+**Baseline (last verified green): 2026-09-16.** Test suite + twelve self-tests pass:
+`python3 -m unittest discover` (62 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo,
-retry_demo,alias_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the
-Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
+retry_demo,alias_demo,coverage_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP
+server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
 
@@ -39,7 +39,7 @@ Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
 | abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3); W-method conformance oracle = M15 ✓ |
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
-| **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
+| **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓; situational awareness = M16 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
 | **revocation** | `matrix` — mutation × binding-kind × plane lifecycle mode (own-account) | ✅ done (M12; +cross-plane, +factor/lifecycle kinds) |
 | **robustness** | oracle confirmation — a verdict must reproduce before it fires | ✅ done (M13) |
@@ -293,6 +293,26 @@ within a bound.
   even at `extra_states=3`; and it *catches* both output-corrupted and structurally-corrupted
   hypotheses (soundness in both directions). +6 tests (suite 57), 11 demos, isolation intact.
 
+### ✅ M16 — Agent situational awareness (reason codes, coverage, principled stopping)  *(done 2026-09-16, session 4)*
+Targets the gap `READINESS.md` ranks highest — *the AI agent is the least-proven part* — by
+upgrading what the strategist **learns from each probe** and **knows about its own progress**, so
+a real LLM driving the loop reasons instead of brute-forcing (and, live, does not spend requests
+re-testing settled surface). **Not** mock-hardening; it changes the agent's feedback, not the target.
+- Files: `agent.py` (`_outcome_reason`, `_fired_signature`, `_frontier`, `Coverage`; `Attempt`
+  gains `is_new`/`reason`; `HuntResult` gains `coverage`/`stop_reason`; `hunt(..., patience=k)`
+  early-stops after k rounds with no new distinct bug; `render_prompt` now carries the coverage
+  block + per-probe reasons), `mcp_tools.py` (`run_probe` returns a `reason`; new `coverage()`),
+  `mcp_server.py` (a `coverage` tool), `coverage_demo.py`.
+- **Three signals now fed back:** (1) a per-probe **reason** — `new_bug` / `duplicate` /
+  `enforced` (ran fully, target secure) / `unbound_action` (verb not on this target — stop
+  proposing it) / `incomplete` (couldn't run as posed) / `suspect`; (2) a **coverage map** —
+  distinct bugs, clauses with evidence, effect-combinations tried, and how many known-alphabet
+  probes remain untried (the frontier); (3) a **principled stop** with a `stop_reason`
+  (budget / patience / strategist_stopped).
+- `coverage_demo`: a scripted adaptive agent finds the 2 bugs, is told *why* each probe landed
+  (including a `duplicate` and an `unbound_action`), and **stops itself on `patience` after 5
+  probes** — vs. the enumerator's 124. +5 tests (suite 62), 12 demos, isolation intact.
+
 ---
 
 ## Pick this up next
@@ -365,6 +385,19 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-16** — *Session 4 (cont) — M16: agent situational awareness.* Chosen to answer the
+  owner's question *"improve the project offline so the AI hunter can use it more effectively?"* —
+  and deliberately aimed at `READINESS.md`'s top gap (the agent is the least-proven part), NOT at
+  mock-hardening. The strategist now gets, per probe, a **reason** it can act on (new_bug /
+  duplicate / enforced / unbound_action / incomplete), a **coverage map** (distinct bugs, clauses
+  with evidence, effect-combinations tried, untried frontier), and a **principled stop**
+  (`hunt(patience=k)` + `HuntResult.stop_reason`). Surfaced through the LLM prompt (a coverage
+  block + reason-annotated history) and the MCP tools (`run_probe.reason`, a new `coverage()`).
+  `coverage_demo` shows a scripted agent stopping itself after 5 probes vs. the enumerator's 124.
+  +5 tests (suite 62), 12 demos, isolation intact. ⚠️ **This improves the agent's *scaffolding*,
+  not its *proof*:** adaptivity is still only shown with a scripted `complete_fn` — a real-model
+  run on a real target (the actual gap 5 in `READINESS.md`) still hasn't happened and is gated on
+  a live target.
 - **2026-09-16** — *Session 4 (cont) — M15: W-method conformance oracle.* Closed the last open
   L* limitation. The random-walk equivalence oracle only samples — it can miss states, so a
   learned machine was never certified. Added `wmethod.py`: a standalone W-method conformance

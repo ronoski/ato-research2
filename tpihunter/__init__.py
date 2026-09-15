@@ -14,8 +14,8 @@ The pieces:
   demo         end-to-end self-test
 """
 from .adapter import ALPHABET, TargetAdapter, Trace
-from .agent import (AgentHunter, EnumeratorStrategist, HuntResult, HuntState,
-                    LLMStrategist, Strategist)
+from .agent import (AgentHunter, Attempt, Coverage, EnumeratorStrategist, HuntResult,
+                    HuntState, LLMStrategist, Strategist)
 from .clauses import CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
 from .flaky import FlakyAdapter
@@ -34,7 +34,7 @@ from .types import Channel, Identifier, Observation, Principal, ProofEvent, Trus
 __all__ = [
     "ALPHABET", "TargetAdapter", "Trace",
     "AgentHunter", "Strategist", "EnumeratorStrategist", "LLMStrategist",
-    "HuntState", "HuntResult",
+    "HuntState", "HuntResult", "Attempt", "Coverage",
     "Cluster", "deduplicate",
     "FlakyAdapter",
     "HuntSession",

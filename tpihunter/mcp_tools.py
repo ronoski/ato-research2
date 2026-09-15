@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .agent import Attempt, Coverage, _fired_signature, _outcome_reason
 from .clauses import CLAUSES
 from .dedup import deduplicate
 from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate, recovery_alias
@@ -84,6 +85,8 @@ class HuntSession:
         self.specs = dict(ACTIONS)     # a private copy — register_action never mutates the global
         self._fired: list = []
         self._fired_keys: set = set()
+        self._fired_sigs: set = set()  # (clause, effects, triggers) — distinctness, for is_new
+        self._history: list = []       # Attempt per probe — feeds coverage()
         self.probes_run = 0
         return {"ok": True, "target": target, "targets": list(_TARGETS),
                 "note": "session reset; attacker does NOT control the email, victim does. "
@@ -202,10 +205,16 @@ class HuntSession:
                    if s.obs and not s.obs.ok and "no binding" in (s.obs.note or "")]
 
         is_new = False
-        if verdict.severity.value == "takeover" and merged not in self._fired_keys:
-            self._fired_keys.add(merged)
-            self._fired.append(cand)
-            is_new = True
+        if verdict.severity.value == "takeover":
+            sig = _fired_signature(merged, verdict, self.specs)
+            is_new = sig not in self._fired_sigs
+            self._fired_sigs.add(sig)
+            if merged not in self._fired_keys:      # keep every takeover path for dedup
+                self._fired_keys.add(merged)
+                self._fired.append(cand)
+        reason = _outcome_reason(verdict, trace, is_new)
+        self._history.append(Attempt(merged, verdict.severity.value, verdict.clause_id,
+                                     verdict.narrative[:80], is_new=is_new, reason=reason))
         out = {
             "ok": True,
             "probe": "  ->  ".join(f"{r}:{a}" for r, a in merged),
@@ -217,6 +226,9 @@ class HuntSession:
             "evidence": [{"kind": e.kind, "detail": e.detail, "strength": e.strength}
                          for e in verdict.evidence],
             "is_new_takeover": is_new,
+            # what this outcome means for your NEXT probe: new_bug/duplicate/enforced/
+            # unbound_action/incomplete/suspect — see coverage() for the whole map.
+            "reason": reason,
             "probes_run": self.probes_run,
         }
         if unbound:
@@ -267,6 +279,24 @@ class HuntSession:
                 "laundered_proof": cl.laundered_proof,
                 "variants_collapsed": cl.size,
             } for cl in clusters],
+        }
+
+    def coverage(self) -> dict:
+        """The agent's map of where it has and hasn't looked, so it can decide whether to keep
+        pulling the same thread, try a new probe shape, or stop: how many DISTINCT bugs found,
+        which TPI clauses have evidence, which effect-combinations have been tried, and how many
+        composition-relevant probes in the known alphabet remain UNTRIED (a floor — you may also
+        invent new actions). Pair it with each run_probe's `reason` (enforced / unbound_action /
+        incomplete / duplicate / new_bug) to avoid re-probing settled surface."""
+        cov = Coverage.compute(self._history, self.specs, self.attacker, self.victim,
+                               self.email, distinct_bugs=len(self._clusters()))
+        return {
+            "distinct_bugs": cov.distinct_bugs,
+            "clauses_found": cov.clauses_found,
+            "effect_combinations_tried": ["+".join(sorted(c)) for c in cov.effect_combos_tried],
+            "frontier_remaining": cov.frontier_remaining,
+            "probes_run": cov.probes_used,
+            "summary": cov.summary(),
         }
 
     def report(self, fmt: str = "markdown") -> dict:

@@ -40,6 +40,85 @@ class Attempt:
     severity: str
     clause_id: Optional[str]
     note: str
+    is_new: bool = False    # a takeover whose (clause, effect-shape, trigger) had not fired before
+    reason: str = ""        # outcome code the strategist can act on (see _outcome_reason)
+
+
+# --------------------------------------------------------------------------- #
+#  Situational awareness: turn each probe's raw verdict into signal the agent can
+#  reason over — WHY a probe landed or didn't, WHAT has been covered, and WHEN to stop.
+# --------------------------------------------------------------------------- #
+def _outcome_reason(verdict, trace, is_new: bool) -> str:
+    """A single actionable code per probe. `new_bug`/`duplicate` for a takeover; for a SAFE
+    probe, distinguish `unbound_action` (a synthesized verb the target does not implement — stop
+    proposing it), `incomplete` (a step did not execute as posed — reformulate), and `enforced`
+    (the probe ran fully and the target correctly denied cross-access — a real secure result)."""
+    sev = verdict.severity.value
+    if sev == "takeover":
+        return "new_bug" if is_new else "duplicate"
+    if sev == "suspect":
+        return "suspect"
+    for s in trace.steps:
+        if s.action in ("arm", "plant", "assess") or s.obs is None or s.obs.ok:
+            continue
+        return "unbound_action" if "no binding" in (s.obs.note or "").lower() else "incomplete"
+    return "enforced"
+
+
+def _fired_signature(merged: Merged, verdict, specs: dict) -> tuple:
+    """A cheap distinctness key aligned with dedup's signature — clause + effect-classes +
+    trigger verbs — so the loop can tell a genuinely new bug from another path to a known one
+    without paying for full causal minimization every round."""
+    effects = frozenset(specs[a].effect.value for _r, a in merged if a in specs)
+    triggers = frozenset(a for _r, a in merged
+                         if a in specs and specs[a].effect.value in ("raise", "cred"))
+    return (verdict.clause_id, effects, triggers)
+
+
+def _frontier(specs: dict, attacker: Principal, victim: Principal, email: str, tried: set) -> int:
+    """How many composition-relevant, well-formed interleavings in the KNOWN alphabet remain
+    untried — a floor on the systematic space left (the agent may also invent new actions)."""
+    from .enumerator import enumerate_plans
+    return sum(1 for c in enumerate_plans(attacker, victim, email, specs=specs)
+               if c.merged not in tried)
+
+
+@dataclass
+class Coverage:
+    """What the hunt has covered so far — the agent's map of where it has and hasn't looked."""
+    distinct_bugs: int
+    clauses_found: list
+    effect_combos_tried: list        # list[frozenset[str]] of effect-classes per probe shape
+    frontier_remaining: int
+    probes_used: int
+
+    def summary(self) -> str:
+        combos = ", ".join("{" + "+".join(sorted(c)) + "}" for c in self.effect_combos_tried) or "none"
+        found = ", ".join(self.clauses_found) or "none"
+        return (f"{self.distinct_bugs} distinct bug(s) [{found}]; effect-combinations tried: "
+                f"{combos}; ~{self.frontier_remaining} known-alphabet probes still untried")
+
+    @classmethod
+    def compute(cls, history: list, specs: dict, attacker: Principal, victim: Principal,
+                email: str, distinct_bugs: Optional[int] = None) -> "Coverage":
+        tried = {h.merged for h in history}
+        found: list = []
+        combos: list = []
+        sigs: set = set()
+        for h in history:
+            eff = frozenset(specs[a].effect.value for _r, a in h.merged if a in specs)
+            if eff and eff not in combos:
+                combos.append(eff)
+            if h.severity == "takeover" and h.clause_id:
+                if h.clause_id not in found:
+                    found.append(h.clause_id)
+                triggers = frozenset(a for _r, a in h.merged
+                                     if a in specs and specs[a].effect.value in ("raise", "cred"))
+                sigs.add((h.clause_id, eff, triggers))
+        return cls(distinct_bugs=distinct_bugs if distinct_bugs is not None else len(sigs),
+                   clauses_found=sorted(found), effect_combos_tried=combos,
+                   frontier_remaining=_frontier(specs, attacker, victim, email, tried),
+                   probes_used=len(history))
 
 
 @dataclass
@@ -109,9 +188,11 @@ class LLMStrategist:
             hist = "\n".join(
                 f"  tried [{' , '.join(f'{r}:{a}' for r, a in h.merged)}] "
                 f"-> {h.severity}" + (f" ({h.clause_id})" if h.clause_id else "")
+                + (f" [{h.reason}]" if h.reason else "")
                 for h in state.history[-20:])
         else:
             hist = "  (nothing tried yet)"
+        cov = Coverage.compute(state.history, state.specs, state.attacker, state.victim, state.email)
         return f"""You are hunting account-takeover bugs via Trust-Provenance Integrity.
 A bug is a reachable state holding a privileged binding whose provenance does not
 justify it. The dangerous class is LAUNDERING: it needs TWO principals (attacker,
@@ -127,8 +208,13 @@ Known actions (alphabet) for this target:
 Roles: "attacker" (does NOT control the email's inbox/IdP) and "victim" (DOES).
 An action marked "needs channel control" only works for the victim.
 
-What you have tried and what happened:
+What you have tried and what happened (the reason in [brackets] tells you what to do next:
+`enforced` = the target is secure there, move on; `unbound_action` = that verb does not exist
+on this target, stop proposing it; `incomplete` = the probe could not run as posed, reformulate;
+`duplicate` = you already found that bug another way; `new_bug` = keep pulling that thread):
 {hist}
+
+Coverage so far: {cov.summary()}
 
 Budget remaining: {state.budget} probes.
 
@@ -220,6 +306,8 @@ class HuntResult:
     bugs: list[Cluster]
     probes_used: int
     attempts: list[Attempt]
+    coverage: Optional[Coverage] = None
+    stop_reason: str = ""       # budget | patience | strategist_stopped
 
 
 class AgentHunter:
@@ -243,22 +331,33 @@ class AgentHunter:
         # against a flaky/rate-limited real target so a verdict must reproduce before it fires.
         self.confirm = confirm
 
-    def _verdict(self, plan):
+    def _run(self, plan):
         a = self.adapter_factory()
         effects = {n: s.effect.value for n, s in self.specs.items()}
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
-                                           effects=effects, confirm=self.confirm))[0]
+                                           effects=effects, confirm=self.confirm))
 
-    def hunt(self, strategist: Strategist) -> HuntResult:
+    def _verdict(self, plan):
+        return self._run(plan)[0]
+
+    def hunt(self, strategist: Strategist, patience: Optional[int] = None) -> HuntResult:
+        """Drive the strategist until it stops, the budget runs out, or — when `patience` is
+        set — `patience` consecutive rounds pass with no new distinct bug (so an adaptive agent
+        does not burn probes once the surface is exhausted). `HuntResult.stop_reason` says which."""
         state = HuntState(self.specs, self.attacker, self.victim, self.email,
                           budget=self.budget)
         fired = []
         seen: set = set()
+        fired_sigs: set = set()
+        stale_rounds = 0
+        stop_reason = ""
         while state.budget > 0:
             proposals = strategist.propose(state)
             if not proposals:
+                stop_reason = "strategist_stopped"
                 break
             state.round += 1
+            progressed = False
             for merged in proposals:
                 if state.budget <= 0:
                     break
@@ -266,13 +365,28 @@ class AgentHunter:
                     continue
                 seen.add(merged)
                 cand = make_candidate(merged, self.attacker, self.victim, self.email, self.specs)
-                v = self._verdict(cand.plan)
+                verdict, trace = self._run(cand.plan)
                 state.budget -= 1
-                state.history.append(Attempt(merged, v.severity.value, v.clause_id,
-                                             v.narrative[:80]))
-                if v.severity.value == "takeover":
+                is_new = False
+                if verdict.severity.value == "takeover":
+                    sig = _fired_signature(merged, verdict, self.specs)
+                    is_new = sig not in fired_sigs
+                    fired_sigs.add(sig)
                     fired.append(cand)
+                    progressed = progressed or is_new
+                state.history.append(Attempt(merged, verdict.severity.value, verdict.clause_id,
+                                             verdict.narrative[:80], is_new=is_new,
+                                             reason=_outcome_reason(verdict, trace, is_new)))
+            if patience is not None:
+                stale_rounds = 0 if progressed else stale_rounds + 1
+                if stale_rounds >= patience:
+                    stop_reason = "patience"
+                    break
+        if not stop_reason:
+            stop_reason = "budget"
         bugs = deduplicate(fired, self.attacker, self.victim, self.email,
                            self._verdict, self.specs)
+        coverage = Coverage.compute(state.history, self.specs, self.attacker, self.victim,
+                                    self.email, distinct_bugs=len(bugs))
         return HuntResult(bugs=bugs, probes_used=self.budget - state.budget,
-                          attempts=state.history)
+                          attempts=state.history, coverage=coverage, stop_reason=stop_reason)

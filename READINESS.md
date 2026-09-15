@@ -79,10 +79,12 @@ mock capability just because it is the only unblocked thing.
    (`MockSUL` = one account); the provenance-relevant structure — `needs_control`, cross-principal
    effects — is **hand-specified, not learned**. The half that catches laundering isn't the half
    that's learned.
-5. **The AI agent — the north star — is the least-proven part.** Adaptivity has only been shown
-   with a **hard-coded fake completion** finding the 2 planted mock bugs; the live-model path is
-   gated out of every green check. No real-model eval, no coverage/stopping model. "Adapt, don't
-   brute-force" currently rests on a script.
+5. **The AI agent — the north star — is the least-proven part.** *Scaffolding improved in M16*
+   (the agent now gets per-probe reason codes, a coverage map, and a principled `patience` stop —
+   so it can reason about where it has looked). **But the proof gap is unchanged:** adaptivity has
+   still only been shown with a **hard-coded fake completion** finding the 2 planted mock bugs; the
+   live-model path is gated out of every green check. "Adapt, don't brute-force" rests on a script
+   until a real model drives a real (or at least noisy) target.
 6. **Robustness gaps that only bite live:** L\* assumes determinism (real auth is not —
    timeouts, rate-limits, async email, per-plane divergence); the W-method suite is exponential in
    `extra_states` and untested on anything that needs >0; params are action-level only (no
