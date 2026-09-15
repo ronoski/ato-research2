@@ -5,6 +5,13 @@ time, never concurrently**, and the rotation cycles back around — so "new to t
 and "returning after two shifts away" both land here; either way, treat the repo as the
 source of truth and re-orient from it, because a lot has changed.
 
+> ⚠️ **Read [`READINESS.md`](READINESS.md) before you pick a task.** The mock loop is
+> complete (M0–M15) and self-validating, but the project is a finished *framework*, not a
+> proven *AI hunter* — and the highest-risk mistake now is spending a shift hardening the
+> mock, which has ~zero marginal value. `READINESS.md` is the honest state-of-the-project:
+> the gaps that matter, and the one decision (authorize a live target, or call the framework
+> the deliverable) that everything else is gated on.
+
 The relay so far (what each shift built — see `git log` and the Changelog):
 - **s1** — the theory + the core: oracle, two-principal adapter, learner, synthesis.
 - **s2** — dedup, the agent control loop, both live strategists (API + Claude-Code/MCP),
