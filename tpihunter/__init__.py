@@ -14,13 +14,23 @@ The pieces:
   demo         end-to-end self-test
 """
 from .adapter import ALPHABET, TargetAdapter, Trace
+from .agent import (AgentHunter, EnumeratorStrategist, HuntResult, HuntState,
+                    LLMStrategist, Strategist)
 from .clauses import CLAUSES, FailureMode
+from .dedup import Cluster, deduplicate
 from .harness import Plan, Step, run_plan
 from .oracle import AtoOracle, Evidence, Severity, Verdict
 from .types import Channel, Identifier, Observation, Principal, ProofEvent, TrustLevel
 
+# Note: `tpihunter.llm.make_complete_fn` (the real-model backend) is intentionally NOT
+# imported here — it lazy-imports `anthropic` only when called, so the core stays
+# stdlib-only. Import it directly: `from tpihunter.llm import make_complete_fn`.
+
 __all__ = [
     "ALPHABET", "TargetAdapter", "Trace",
+    "AgentHunter", "Strategist", "EnumeratorStrategist", "LLMStrategist",
+    "HuntState", "HuntResult",
+    "Cluster", "deduplicate",
     "CLAUSES", "FailureMode",
     "Plan", "Step", "run_plan",
     "AtoOracle", "Evidence", "Severity", "Verdict",

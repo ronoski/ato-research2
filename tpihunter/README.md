@@ -75,11 +75,13 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `learner.py` | L* Mealy-machine learner (black-box automata learning) |
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
 | `agent.py` | **agent-as-hunter**: `AgentHunter` loop + `Strategist` seam (enumerator / LLM) |
+| `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
 | `synth_demo.py` | self-test of the closed loop (learn → synthesize → enumerate) |
 | `agent_demo.py` | self-test of the agent loop (enumerator vs a fake-LLM strategist) |
+| `live_agent_demo.py` | the real LLM strategist on the mock (gated by `TPIHUNTER_LIVE=1`) |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
@@ -161,6 +163,17 @@ python3 -m tpihunter.agent_demo
 
 In the demo the fake-LLM agent finds the same 2 bugs in **2 probes vs the enumerator's
 124** — the point of agent-as-hunter: adapt, don't brute-force.
+
+### Two ways to make the strategist real
+
+- **API / headless** (`llm.py`): `LLMStrategist(make_complete_fn())` calls the `anthropic`
+  SDK (default `claude-opus-5`, adaptive thinking). Best for CI / headless / non-Claude-
+  Code runs. **Bills pay-per-token on the Messages API — separate from a Claude Max/Pro
+  subscription.** Run it with `TPIHUNTER_LIVE=1 python3 -m tpihunter.live_agent_demo`.
+- **Claude Code / Max subscription** (planned, M10): expose the loop's primitives as an
+  **MCP server** so the Opus agent in the Claude Code CLI drives the hunt — Claude Code
+  *is* the strategist, running on your subscription, no API key. This is the path for
+  hunting on a Max plan.
 
 ## Automata learning
 

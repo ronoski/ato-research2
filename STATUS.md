@@ -15,9 +15,10 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + five self-tests pass:
-`python3 -m unittest discover` (16 tests), and
-`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo,agent_demo}`.
+**Baseline (last verified green): 2026-09-15.** Test suite + six self-tests pass:
+`python3 -m unittest discover` (19 tests), and
+`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo,agent_demo,live_agent_demo}`
+(the live one is gated behind `TPIHUNTER_LIVE=1`; without it, it prints setup and exits).
 
 ---
 
@@ -37,7 +38,7 @@ live agent driving the loop?*
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
 | abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
-| **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); real LLM = M9 |
+| **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; **Claude-Code/Max strategist = M10** |
 
 ---
 
@@ -144,39 +145,52 @@ Recast probe generation as a pluggable **strategy** so an agent can drive the lo
 - Accept: `agent_demo` finds the same 2 bugs via both strategies; the fake-LLM agent
   does it in **2 probes vs the enumerator's 124** — the adapt-don't-brute-force point.
 
-### 🔜 M9 — Wire a real LLM strategist  *(NEXT — the north-star task, unclaimed)*
-Replace the fake `complete_fn` with a real model call so the loop is a live agent.
-- **Start:** implement one `complete_fn(prompt:str)->str` calling a model (keep it a
-  thin, isolated adapter — the core stays stdlib/dep-free; put the client behind an
-  optional import). Validate on the mock: the agent should find both bugs within a
-  small budget, driven by `render_prompt` alone.
-- **Then (the real leverage):** let the strategist **propose new actions**, not just
-  interleave known ones — a real target has flows the fixed alphabet lacks (magic
-  links, device pairing, org invites, email aliasing). Extend `HuntState`/prompt so
-  the model can return new `ActionSpec`s that feed straight into generation.
-- **Decision needed from owner:** which model/runtime, and whether to expose the tools
-  as an MCP server vs. an in-process `complete_fn`. See *Pick this up next*.
-- Accept: a live agent finds both mock bugs from the prompt with no probe hand-coded,
-  within a stated budget; a test uses a scripted `complete_fn` (no network).
+### ✅ M9 — Real LLM strategist (API / headless path)  *(done 2026-09-15)*
+`complete_fn` backed by a real model, so the loop is a live agent.
+- Files: `llm.py` (`make_complete_fn`, `anthropic_complete`, `RefusalError`),
+  `live_agent_demo.py`; `agent.py`/`dedup.py` exported from `__init__`.
+- Uses the official `anthropic` SDK, **lazy-imported** so the core stays stdlib-only.
+  Default model **`claude-opus-5`** (Opus-tier), adaptive thinking. `client` is
+  injectable → tested with a fake (no network); `live_agent_demo` is gated behind
+  `TPIHUNTER_LIVE=1` so the green-check never makes a paid call.
+- **Billing note:** this path calls the **Messages API** — pay-per-token API billing,
+  *separate from a Claude Max/Pro subscription*. It's the right path for CI / headless
+  / non-Claude-Code runs. To hunt on a **Max subscription**, use M10.
+- Accept: live wiring test (fake client → `complete_fn` → `LLMStrategist` →
+  `AgentHunter`) finds both bugs in 2 probes; defaults assert Opus + adaptive thinking.
+
+### 🔜 M10 — Claude-Code / Max-subscription strategist  *(NEXT — owner's actual goal)*
+Let **the Opus agent in the Claude Code CLI** be the strategist, so hunting runs on the
+owner's **Claude Max 20x subscription** instead of pay-per-token API billing.
+- **Approach (recommended): a tpihunter MCP server** exposing the loop's primitives as
+  tools — `learn_target`, `enumerate_candidates`, `run_probe(steps) -> verdict`,
+  `dedup_findings`, `report`. Then `claude mcp add tpihunter …` and drive the hunt from
+  any Claude Code session; Claude Code (on Max) IS the `LLMStrategist`.
+- Everything it needs already exists as functions (`AgentHunter` internals, `run_plan`,
+  `deduplicate`); the MCP server is a thin wrapper. Keep the `mcp` dep isolated like
+  `llm.py` isolates `anthropic`.
+- Accept: from a Claude Code session, "hunt the mock" drives probes → verdicts → 2
+  distinct bugs, with no API key and no probes hand-coded.
 
 ---
 
 ## Pick this up next
 
-North star is **agent as hunter** (top of this doc). The control loop + strategy seam
-now exist (M8); the agent is one `complete_fn` away from being live. In priority order:
+North star is **agent as hunter** (top of this doc). The loop is live via the API (M9);
+the owner hunts on a **Claude Max 20x subscription**, so the priority is making the
+Claude Code CLI agent the strategist:
 
-1. **M9 — wire a real LLM strategist** (the north-star task). Implement a real
-   `complete_fn` and validate the live agent on the mock, then let it propose *new
-   actions*. **Owner decision needed:** which model/runtime, and MCP-server vs.
-   in-process `complete_fn`. (Ask before building the integration.)
-2. **M7 — evidence bundle.** Turn each dedup `Cluster` into a shareable report. Needs
-   no target; good parallel work and feeds the agent's final "report" step.
-3. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner; also
-   point the learner (`sul.py`) at it once available.
+1. **M10 — Claude-Code / Max-subscription strategist (owner's goal).** Build the
+   tpihunter MCP server so Claude Code (on Max) drives the hunt — no API key, no
+   pay-per-token. See M10.
+2. **New-action synthesis** — let the strategist propose *new* `ActionSpec`s (target
+   flows the fixed alphabet lacks: magic links, device pairing, org invites, email
+   aliasing), feeding straight into generation. Applies to both M9 and M10 strategists.
+3. **M7 — evidence bundle.** Turn each dedup `Cluster` into a shareable report; the
+   agent's final "report" step. Needs no target.
+4. **M4 — real `TargetAdapter`.** Blocked on an authorized target from the owner.
 
-Small open: **W-method conformance oracle** for the learner (soundness within a bound);
-**new-action synthesis** so the agent can extend the alphabet (part of M9's second half).
+Small open: **W-method conformance oracle** for the learner (soundness within a bound).
 
 ---
 
@@ -207,6 +221,14 @@ Small open: **W-method conformance oracle** for the learner (soundness within a 
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M9 done (API path).** Added `llm.py` — a real
+  `complete_fn` on the `anthropic` SDK (lazy-imported; core stays stdlib), default
+  `claude-opus-5` + adaptive thinking, injectable client, tested with a fake. Added
+  `live_agent_demo.py` (gated by `TPIHUNTER_LIVE=1`). +3 tests (suite 19). **Owner
+  clarified they hunt on a Claude Max 20x subscription** — the API path bills
+  separately, so **M10 (Claude-Code/MCP strategist) is now the priority**: make the CLI
+  Opus agent the strategist so hunting runs on the subscription. See M10 / *Pick this up
+  next*.
 - **2026-09-15** — *Session 3 (cont).* **Goal confirmed by owner: AGENT AS HUNTER**,
   and **M8 built** to serve it. Recast probe generation as a pluggable `Strategist`
   and added `AgentHunter` (`agent.py`): the enumerator is now just the baseline

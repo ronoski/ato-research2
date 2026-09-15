@@ -171,6 +171,35 @@ def _adapter_factory(victim):
     return lambda: MockAdapter(patched=False, control=control)
 
 
+# --- a fake anthropic client, so the LLM wiring is testable with no network ---
+class _Block:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
+
+
+class _Resp:
+    def __init__(self, text, stop_reason="end_turn"):
+        self.content = [_Block(text)]
+        self.stop_reason = stop_reason
+        self.stop_details = None
+
+
+class _FakeMessages:
+    def __init__(self, text, stop_reason="end_turn"):
+        self._text, self._stop = text, stop_reason
+        self.last_kwargs = None
+
+    def create(self, **kwargs):
+        self.last_kwargs = kwargs
+        return _Resp(self._text, self._stop)
+
+
+class _FakeClient:
+    def __init__(self, text, stop_reason="end_turn"):
+        self.messages = _FakeMessages(text, stop_reason)
+
+
 def _two_probes(_prompt):
     return json.dumps([
         {"steps": [["attacker", "register"], ["victim", "sso_login"]]},
@@ -209,6 +238,34 @@ class TestAgent(unittest.TestCase):
         # unknown action dropped -> empty; malformed text -> empty
         self.assertEqual(strat.parse_proposals('[{"steps": [["attacker","nope"]]}]', state), [])
         self.assertEqual(strat.parse_proposals("not json at all", state), [])
+
+
+class TestLLM(unittest.TestCase):
+    def test_complete_returns_text_and_sends_opus(self):
+        from tpihunter.llm import anthropic_complete
+        fake = _FakeClient('[{"steps": [["attacker","register"]]}]')
+        out = anthropic_complete("hi", client=fake)
+        self.assertEqual(out, '[{"steps": [["attacker","register"]]}]')
+        # defaults: Opus-tier model + adaptive thinking
+        self.assertEqual(fake.messages.last_kwargs["model"], "claude-opus-5")
+        self.assertEqual(fake.messages.last_kwargs["thinking"], {"type": "adaptive"})
+
+    def test_refusal_raises(self):
+        from tpihunter.llm import anthropic_complete, RefusalError
+        fake = _FakeClient("", stop_reason="refusal")
+        with self.assertRaises(RefusalError):
+            anthropic_complete("hi", client=fake)
+
+    def test_live_wiring_finds_bugs_with_fake_client(self):
+        # the whole path: fake model -> complete_fn -> LLMStrategist -> AgentHunter
+        from tpihunter.llm import make_complete_fn
+        attacker, victim = _principals()
+        fake = _FakeClient(_two_probes(""))
+        complete_fn = make_complete_fn(client=fake)
+        hunter = AgentHunter(_adapter_factory(victim), attacker, victim, EMAIL, budget=50)
+        res = hunter.hunt(LLMStrategist(complete_fn, max_rounds=1))
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+        self.assertEqual(res.probes_used, 2)
 
 
 if __name__ == "__main__":
