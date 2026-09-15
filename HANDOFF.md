@@ -1,13 +1,21 @@
 # HANDOFF — start here
 
-You are the next session taking over this project — the **third contributor** (the relay
-so far: person 1 built the theory + core oracle/adapter/learner; person 2 built dedup, the
-agent control loop, both live strategists, and new-action synthesis; you are person 3).
-The previous session has paused. **We work as a relay: one session at a time, never
-concurrently.** Your shift, in order: (1) get oriented, (2) review the existing work with a
-critical eye, (3) improve what needs it and continue the roadmap, (4) leave the tree green
-and hand back cleanly. You have a real mandate to **review and refactor**, not just append
-— but read the *Decisions log* in `STATUS.md` before reopening a settled trade-off.
+You are the next shift taking over this project. **We work as a relay: one session at a
+time, never concurrently**, and the rotation cycles back around — so "new to the project"
+and "returning after two shifts away" both land here; either way, treat the repo as the
+source of truth and re-orient from it, because a lot has changed.
+
+The relay so far (what each shift built — see `git log` and the Changelog):
+- **s1** — the theory + the core: oracle, two-principal adapter, learner, synthesis.
+- **s2** — dedup, the agent control loop, both live strategists (API + Claude-Code/MCP),
+  new-action synthesis, the evidence bundle.
+- **s3** — the Grab engagement lens (offline), and the **revocation matrix** (a whole
+  second hunting mode: cross-plane + factor/lifecycle kinds).
+
+Your shift, in order: (1) get oriented, (2) review the existing work with a critical eye,
+(3) improve what needs it and continue the roadmap, (4) leave the tree green and hand back
+cleanly. You have a real mandate to **review and refactor**, not just append — but read the
+*Decisions log* in `STATUS.md` before reopening a settled trade-off.
 
 ---
 

@@ -288,6 +288,18 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *End of shift (s3) — handing back to the next shift.* Two judgment modes
+  are complete and self-validating on the mock: two-principal confluence (`oracle`) and the
+  single-principal **revocation matrix** (`matrix` — cross-plane SPLIT + session/factor
+  lifecycle kinds + an expectation model). 40 tests + 9 demos green; core import pulls in
+  neither `anthropic` nor `mcp`; nothing half-done. **Next shift: read `HANDOFF.md` first,
+  then §6 — the matrix is now rich enough that the highest-value step is running it against a
+  real authorized target (M4), the most ROE-compatible mode.** That step is gated on the
+  owner naming/authorizing a target and going through preflight — *do not fire anything
+  live without that*. Offline alternatives if M4 stays blocked: iterate the Grab lens
+  (`~/singularity/grab/ato/TPI_LENS.md`), or the robustness items (oracle retry, richer
+  synthesized-action params). HANDOFF intro was generalized for the returning-contributor
+  rotation.
 - **2026-09-15** — *Session 3 (cont).* **M12 lifecycle kinds.** Extended the matrix from
   session-only to the whole credential lifecycle: a **factor** mint (enrol a passkey/
   biometric — a durable binding that outlives the session that made it) and an
