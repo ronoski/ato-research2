@@ -1,0 +1,710 @@
+<title>Provenance, Not Reachability</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#ECEFF3; --surface:#FBFCFE; --surface-2:#F2F5F9;
+    --ink:#171A21; --ink-soft:#535B67; --ink-faint:#828B98;
+    --line:#D6DBE3; --line-strong:#B7C0CD;
+    --accent:#2C4E86; --accent-soft:#E7EDF7;
+    --valid:#0E7C66; --valid-soft:#E1F0EB;
+    --breach:#B23A2E; --breach-soft:#F6E4E1;
+    --gold:#8E620F;
+    --serif:"Newsreader",Georgia,"Times New Roman",serif;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",monospace;
+    --measure:68ch; --plate:1000px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1116; --surface:#161A20; --surface-2:#1C222B;
+      --ink:#E7EAEF; --ink-soft:#A3ACB9; --ink-faint:#727C8A;
+      --line:#2A313B; --line-strong:#3B4551;
+      --accent:#87A9E0; --accent-soft:#1A2740;
+      --valid:#49BBA6; --valid-soft:#122E28;
+      --breach:#E27C6B; --breach-soft:#3A1E1A;
+      --gold:#D6A64A;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1116; --surface:#161A20; --surface-2:#1C222B;
+    --ink:#E7EAEF; --ink-soft:#A3ACB9; --ink-faint:#727C8A;
+    --line:#2A313B; --line-strong:#3B4551;
+    --accent:#87A9E0; --accent-soft:#1A2740;
+    --valid:#49BBA6; --valid-soft:#122E28;
+    --breach:#E27C6B; --breach-soft:#3A1E1A;
+    --gold:#D6A64A;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--serif); font-size:18px; line-height:1.62;
+    font-variant-ligatures:common-ligatures;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--accent-soft); color:var(--ink)}
+
+  main{max-width:var(--plate); margin-inline:auto; padding-inline:clamp(18px,5vw,40px); padding-block:0}
+  .prose{max-width:var(--measure); margin-inline:auto}
+  .plate{max-width:var(--plate); margin-inline:auto; width:100%}
+
+  .prose>*+*{margin-top:1.05em}
+  .prose h2{margin-top:2.7em} .prose h3{margin-top:1.9em}
+  p{margin:0} a{color:var(--accent); text-underline-offset:2px; text-decoration-thickness:.06em}
+
+  /* ---- furniture / labels ---- */
+  .eyebrow{font-family:var(--sans); font-weight:600; font-size:.72rem;
+    letter-spacing:.15em; text-transform:uppercase; color:var(--ink-soft)}
+  .mono{font-family:var(--mono)}
+  code, .m{font-family:var(--mono); font-size:.86em}
+  code{background:var(--surface-2); border:1px solid var(--line);
+    padding:.06em .34em; border-radius:4px; color:var(--ink)}
+  .m{color:var(--accent)}
+  em.term{font-style:italic; color:var(--ink)}
+  strong{font-weight:600}
+
+  /* ---- masthead ---- */
+  header.mast{border-bottom:1px solid var(--line); padding-block:clamp(30px,7vw,64px) 30px; margin-bottom:8px}
+  .doc-id{display:flex; flex-wrap:wrap; gap:.5em 1.4em; align-items:baseline; margin-bottom:1.6em}
+  .doc-id .tag{font-family:var(--mono); font-size:.74rem; color:var(--ink-soft); letter-spacing:.02em}
+  .doc-id .tag b{color:var(--accent); font-weight:600}
+  h1{font-family:var(--serif); font-weight:500; letter-spacing:-.02em;
+    line-height:1.02; font-size:clamp(2.5rem,7.5vw,4.1rem); margin:.1em 0 .28em;
+    text-wrap:balance}
+  h1 .thin{color:var(--ink-soft); font-style:italic; font-weight:400}
+  .standfirst{font-size:clamp(1.12rem,2.4vw,1.34rem); color:var(--ink-soft); max-width:60ch; line-height:1.5}
+  .metarow{display:flex; flex-wrap:wrap; gap:1px; margin-top:2em; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--line)}
+  .metarow div{flex:1 1 160px; background:var(--surface); padding:.7em .95em}
+  .metarow dt{font-family:var(--sans); font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:.25em}
+  .metarow dd{margin:0; font-family:var(--sans); font-size:.9rem; color:var(--ink)}
+
+  .contents{margin-top:2.2em; font-family:var(--sans)}
+  .contents .eyebrow{margin-bottom:.7em; display:block}
+  .contents ol{list-style:none; margin:0; padding:0; columns:2; column-gap:2.4em}
+  .contents li{break-inside:avoid; margin-bottom:.45em; font-size:.92rem}
+  .contents li a{color:var(--ink); text-decoration:none; display:flex; gap:.7em}
+  .contents li a:hover{color:var(--accent)}
+  .contents .n{font-family:var(--mono); color:var(--accent); font-size:.82rem; min-width:1.6em}
+
+  h2{font-family:var(--serif); font-weight:500; font-size:clamp(1.55rem,3.4vw,2.1rem);
+    letter-spacing:-.015em; line-height:1.12; text-wrap:balance}
+  h2 .sec{font-family:var(--mono); font-size:.62em; font-weight:500; color:var(--accent);
+    letter-spacing:0; vertical-align:.12em; margin-right:.7em}
+  h3{font-family:var(--serif); font-weight:600; font-size:1.24rem; letter-spacing:-.01em}
+
+  /* ---- abstract ---- */
+  .abstract{background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:clamp(1.3em,3.5vw,2em); margin-top:2.4em; max-width:800px}
+  .abstract .eyebrow{display:block; margin-bottom:.9em}
+  .abstract p{font-size:1rem; line-height:1.6}
+  .abstract p+p{margin-top:.85em}
+
+  /* ---- pull quote ---- */
+  .kernel{max-width:var(--plate); margin:3.4em auto; text-align:center; padding-inline:16px}
+  .kernel blockquote{margin:0; font-family:var(--serif); font-weight:400; font-style:italic;
+    font-size:clamp(1.7rem,5vw,2.9rem); line-height:1.18; letter-spacing:-.02em; text-wrap:balance}
+  .kernel .hl{font-style:normal; color:var(--breach)}
+  .kernel .hl2{font-style:normal; color:var(--valid)}
+  .kernel figcaption{font-family:var(--sans); font-size:.8rem; color:var(--ink-faint);
+    letter-spacing:.1em; text-transform:uppercase; margin-top:1.3em}
+
+  /* ---- formal environments ---- */
+  .env{border:1px solid var(--line); border-radius:10px; background:var(--surface);
+    padding:1.15em 1.3em; margin:1.6em auto; max-width:800px}
+  .env .lab{font-family:var(--sans); font-weight:600; font-size:.72rem; letter-spacing:.12em;
+    text-transform:uppercase; margin-bottom:.55em; display:flex; align-items:center; gap:.6em}
+  .env .lab .id{font-family:var(--mono); letter-spacing:0}
+  .env p{font-size:1rem; line-height:1.55}
+  .env.def{border-left:3px solid var(--accent)} .env.def .lab{color:var(--accent)}
+  .env.inv{border-left:3px solid var(--valid); background:var(--valid-soft)}
+  .env.inv .lab{color:var(--valid)}
+  .env.thm{border-left:3px solid var(--accent); background:var(--accent-soft)}
+  .env.thm .lab{color:var(--accent)}
+  .env .formula{font-family:var(--mono); font-size:.94rem; line-height:1.5;
+    background:var(--surface); border:1px solid var(--line); border-radius:7px;
+    padding:.7em .85em; margin-top:.75em; overflow-x:auto}
+  .env.inv .formula{background:rgba(255,255,255,.35)}
+  :root[data-theme="dark"] .env.inv .formula, :root:not([data-theme="light"]) .env.inv .formula{background:rgba(0,0,0,.22)}
+  .env .proof{margin-top:.8em; font-size:.97rem; color:var(--ink-soft); line-height:1.55}
+  .env .proof .qed{float:right; font-family:var(--mono); color:var(--ink-soft)}
+  .env .proof b{color:var(--ink)}
+
+  /* ---- figures ---- */
+  figure{margin:2.4em auto; max-width:var(--plate)}
+  figure .frame{background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:clamp(1em,3vw,1.6em)}
+  .dgm{width:100%; height:auto; display:block; color:var(--ink)}
+  .dgm text{font-family:var(--sans); fill:var(--ink)}
+  .dgm .mono-t{font-family:var(--mono)}
+  figcaption{font-family:var(--sans); font-size:.86rem; line-height:1.5; color:var(--ink-soft);
+    margin-top:1em; max-width:74ch}
+  figcaption .fnum{font-weight:600; color:var(--ink); letter-spacing:.02em}
+
+  /* svg semantic classes */
+  .nf{fill:var(--surface)} .nf2{fill:var(--surface-2)}
+  .ns{stroke:var(--line-strong)} .grid{stroke:var(--line)}
+  .t-ink{fill:var(--ink)} .t-soft{fill:var(--ink-soft)} .t-faint{fill:var(--ink-faint)}
+  .s-ink{stroke:var(--ink-soft)}
+  .acc-s{stroke:var(--accent)} .acc-f{fill:var(--accent)} .acc-bg{fill:var(--accent-soft)}
+  .val-s{stroke:var(--valid)} .val-f{fill:var(--valid)} .val-bg{fill:var(--valid-soft)}
+  .brc-s{stroke:var(--breach)} .brc-f{fill:var(--breach)} .brc-bg{fill:var(--breach-soft)}
+
+  /* ---- taxonomy table ---- */
+  .tablewrap{max-width:var(--plate); margin:2em auto; overflow-x:auto; border:1px solid var(--line); border-radius:12px}
+  table{border-collapse:collapse; width:100%; min-width:720px; font-family:var(--sans); background:var(--surface)}
+  thead th{font-size:.68rem; letter-spacing:.11em; text-transform:uppercase; color:var(--ink-faint);
+    text-align:left; padding:.9em 1em; border-bottom:1px solid var(--line-strong); font-weight:600}
+  tbody td{padding:.85em 1em; border-bottom:1px solid var(--line); font-size:.9rem; vertical-align:top; line-height:1.4}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:nth-child(even){background:var(--surface-2)}
+  td .attack{font-weight:500; color:var(--ink)}
+  td .m{color:var(--accent)}
+  .chip{display:inline-block; font-family:var(--sans); font-weight:600; font-size:.68rem;
+    letter-spacing:.05em; text-transform:uppercase; padding:.24em .6em; border-radius:999px; white-space:nowrap}
+  .chip.laundering{background:var(--breach-soft); color:var(--breach); border:1px solid var(--breach)}
+  .chip.forgery{background:var(--breach-soft); color:var(--breach)}
+  .chip.gap{background:transparent; color:var(--breach); border:1px dashed var(--breach)}
+  .chip.oos{background:var(--surface-2); color:var(--ink-faint); border:1px solid var(--line-strong)}
+
+  /* ---- alphabet block ---- */
+  .code-note{font-family:var(--mono); font-size:.86rem; line-height:1.65; background:var(--surface);
+    border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px;
+    padding:1em 1.15em; margin:1.5em auto; max-width:var(--plate); overflow-x:auto; color:var(--ink)}
+  .code-note .k{color:var(--valid)} .code-note .c{color:var(--ink-faint)}
+
+  /* ---- predictions ---- */
+  .preds{list-style:none; margin:1.4em 0 0; padding:0; display:grid; gap:.9em}
+  .preds li{display:flex; gap:1em; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:1em 1.2em}
+  .preds .pid{font-family:var(--mono); font-weight:600; color:var(--accent); font-size:.92rem; flex-shrink:0}
+  .preds p{font-size:.98rem; line-height:1.5}
+  .preds .refute{display:block; margin-top:.4em; font-family:var(--sans); font-size:.82rem; color:var(--breach)}
+
+  hr.rule{border:none; border-top:1px solid var(--line); margin:3.2em auto; max-width:var(--plate)}
+
+  footer{border-top:1px solid var(--line); margin-top:3.5em; padding-block:2.4em 3em}
+  footer .prose{font-family:var(--sans); font-size:.85rem; color:var(--ink-soft)}
+  footer .refs{margin-top:1em; line-height:1.7}
+  footer .refs b{color:var(--ink); font-weight:600}
+
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+  @media (prefers-reduced-motion:no-preference){
+    a, .contents li a{transition:color .15s ease}
+  }
+  @media (max-width:560px){
+    body{font-size:16.5px}
+    .contents ol{columns:1}
+    .metarow div{flex:1 1 45%}
+  }
+</style>
+
+<main>
+
+<header class="mast">
+  <div class="prose" style="max-width:var(--plate)">
+    <div class="doc-id">
+      <span class="tag"><b>TPI</b> · Trust-Provenance Integrity</span>
+      <span class="tag">Working paper · Draft 0.1</span>
+      <span class="tag">2026-09-15</span>
+      <span class="tag">Domain: account takeover / auth bypass</span>
+    </div>
+    <p class="eyebrow">A compositional state-machine theory of authentication failure</p>
+    <h1>Provenance, <span class="thin">not</span> Reachability</h1>
+    <p class="standfirst">The worst account-takeover bugs are not unintended paths in a login automaton. They are broken answers to a different question — <em class="term">what justifies the privileges the system is holding right now?</em> — and that question is invisible to any model of a single session.</p>
+
+    <dl class="metarow">
+      <div><dt>Central claim</dt><dd>ATO is a provenance failure, not a reachability fault</dd></div>
+      <div><dt>Key result</dt><dd>Composition-Blindness (Thm. 1)</dd></div>
+      <div><dt>Method</dt><dd>Relational Alloy · provenance-annotated L*</dd></div>
+      <div><dt>Status</dt><dd>Falsifiable · 3 predictions</dd></div>
+    </dl>
+
+    <nav class="contents" aria-label="Contents">
+      <span class="eyebrow">Contents</span>
+      <ol>
+        <li><a href="#s1"><span class="n">§1</span> The reframe</a></li>
+        <li><a href="#s2"><span class="n">§2</span> A relational framework</a></li>
+        <li><a href="#s3"><span class="n">§3</span> Three ways provenance fails</a></li>
+        <li><a href="#s4"><span class="n">§4</span> Composition-Blindness</a></li>
+        <li><a href="#s5"><span class="n">§5</span> A taxonomy by failure</a></li>
+        <li><a href="#s6"><span class="n">§6</span> Worked exploit: pre-hijacking</a></li>
+        <li><a href="#s7"><span class="n">§7</span> From theory to counterexamples</a></li>
+        <li><a href="#s8"><span class="n">§8</span> Falsifiable predictions</a></li>
+        <li><a href="#s9"><span class="n">§9</span> Novelty, prior art, limits</a></li>
+      </ol>
+    </nav>
+  </div>
+</header>
+
+<section class="abstract plate">
+  <span class="eyebrow">Abstract</span>
+  <p>Account-takeover (ATO) and authentication-bypass vulnerabilities are conventionally hunted as <em class="term">reachability</em> faults: model the login protocol as an automaton and search for an unintended path to an "authenticated-as-victim" state. This paper argues the framing is structurally wrong for the most damaging modern ATOs. We reframe the target property from <strong>state reachability</strong> to <strong>trust-provenance integrity</strong>: every privileged binding a system holds — a session bound to an account, an identifier marked verified, a capability granted to a session — must trace to a <em class="term">proof event</em> demonstrating control of exactly the resource the binding privileges, by the same principal, within a freshness window. A vulnerability is a reachable configuration holding a binding whose provenance is empty (<em class="term">gap</em>), forged (<em class="term">forgery</em>), or upgraded from a weaker fact (<em class="term">laundering</em>).</p>
+  <p>We show provenance is a property of the <em class="term">composition</em> of many principals' lifecycle automata over a shared identity store, and give a <strong>Composition-Blindness</strong> argument: subsystems that each satisfy the classical single-session reachability property can compose into a system that violates provenance integrity — so the dominant ATO class is unmodelable per-session by construction. We provide a relational formalization, a taxonomy filing known attacks (pre-account-hijacking, OAuth link confusion, reset-token survival, remember-me bypass) under the three failures, and a two-track method — a relational Alloy model and provenance-annotated automata learning — that turns the theory into counterexamples.</p>
+</section>
+
+<figure class="kernel">
+  <blockquote>Trust levels <span class="hl2">compose</span>.<br>Provenance <span class="hl">does not</span>.</blockquote>
+  <figcaption>The one line the whole paper defends</figcaption>
+</figure>
+
+<!-- ============ §1 ============ -->
+<div class="prose">
+  <h2 id="s1"><span class="sec">§1</span>The reframe</h2>
+  <p>Ask a security engineer to model authentication and you get a login automaton: <code>anon → password → mfa → authenticated</code>, plus a scatter of error edges. Hunting takeover then means searching for an <em class="term">unintended path</em> to the authenticated state — a skipped check, a step reached out of order. This is the reachability view, and protocol state fuzzing turned it into a discipline: enumerate the inputs, learn the machine the server <em class="term">actually</em> implements, and diff it against the intended one.</p>
+  <p>The reachability view is correct, and it is not enough. The takeovers that mattered most in recent years — pre-account-hijacking, OAuth account-linking confusion, recovery flows that trust the wrong inbox — are not unintended paths in <em class="term">anyone's</em> login automaton. Each principal's machine is well-behaved in isolation. The bug lives in what they share.</p>
+</div>
+
+<figure>
+  <div class="frame">
+    <svg class="dgm" viewBox="0 0 940 420" role="img" aria-label="Left: a classical single-session automaton anon to partial to full, with a dotted unintended path an attacker can model. Right: a composite view where the exploitable edge crosses between an attacker principal and a victim principal through a shared identity store row, and exists in neither principal's own automaton.">
+      <defs>
+        <marker id="ai1" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="t-soft"/></marker>
+        <marker id="ab1" markerWidth="10" markerHeight="10" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="brc-f"/></marker>
+      </defs>
+
+      <!-- headers -->
+      <text x="24" y="34" class="eyebrow" style="font-size:13px; letter-spacing:1.5px; font-weight:600" fill="var(--ink-soft)">CLASSICAL · ONE SESSION, ONE PROTOCOL</text>
+      <text x="500" y="34" class="eyebrow" style="font-size:13px; letter-spacing:1.5px; font-weight:600" fill="var(--ink-soft)">COMPOSITE · MANY PRINCIPALS, ONE STORE</text>
+      <line x1="470" y1="52" x2="470" y2="392" class="grid" stroke-dasharray="2 5"/>
+
+      <!-- LEFT panel -->
+      <!-- nodes -->
+      <g class="mono-t" style="font-size:14px" text-anchor="middle">
+        <rect x="30" y="150" width="104" height="44" rx="9" class="nf ns"/><text x="82" y="177" class="t-ink">anon</text>
+        <rect x="184" y="150" width="104" height="44" rx="9" class="nf ns"/><text x="236" y="177" class="t-ink">partial</text>
+        <rect x="338" y="150" width="104" height="44" rx="9" class="nf ns" stroke="var(--accent)"/><text x="390" y="177" class="t-ink">full</text>
+      </g>
+      <line x1="134" y1="172" x2="180" y2="172" class="s-ink" marker-end="url(#ai1)"/>
+      <line x1="288" y1="172" x2="334" y2="172" class="s-ink" marker-end="url(#ai1)"/>
+      <text x="157" y="163" text-anchor="middle" class="t-soft" style="font-size:11px">password</text>
+      <text x="311" y="163" text-anchor="middle" class="t-soft" style="font-size:11px">mfa</text>
+      <!-- unintended arc -->
+      <path d="M82,150 C 150,78 322,78 390,150" fill="none" class="brc-s" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ab1)"/>
+      <text x="236" y="86" text-anchor="middle" class="brc-f" style="font-size:11.5px; font-weight:600">unintended path</text>
+      <text x="236" y="101" text-anchor="middle" class="t-soft" style="font-size:10.5px">— modelled &amp; fuzzable</text>
+      <text x="30" y="250" class="t-soft" style="font-size:12.5px">Safety = no bad path reaches <tspan class="mono-t" fill="var(--ink)">full</tspan>.</text>
+      <text x="30" y="270" class="t-soft" style="font-size:12.5px">One principal. One session's alphabet.</text>
+
+      <!-- RIGHT panel -->
+      <!-- lane labels -->
+      <text x="500" y="108" class="t-faint" style="font-size:10.5px; letter-spacing:1px">PRINCIPAL A · attacker</text>
+      <text x="500" y="333" class="t-faint" style="font-size:10.5px; letter-spacing:1px">PRINCIPAL V · victim</text>
+      <!-- shared store band -->
+      <rect x="500" y="196" width="416" height="66" rx="8" class="nf2 ns"/>
+      <text x="514" y="210" class="t-faint" style="font-size:10px; letter-spacing:1px">SHARED IDENTITY STORE</text>
+      <text x="514" y="232" class="mono-t t-ink" style="font-size:13px">row: email = v@corp</text>
+      <text x="514" y="252" class="mono-t" style="font-size:13px" fill="var(--ink)">trust: <tspan fill="var(--ink-soft)">claimed</tspan> ──▶ <tspan class="val-f" font-weight="600">verified</tspan></text>
+      <!-- attacker node -->
+      <rect x="560" y="116" width="180" height="40" rx="9" class="nf ns"/>
+      <text x="650" y="141" text-anchor="middle" class="mono-t t-ink" style="font-size:12.5px">session A (pre-seeded)</text>
+      <!-- victim node -->
+      <rect x="560" y="286" width="180" height="40" rx="9" class="nf ns"/>
+      <text x="650" y="311" text-anchor="middle" class="mono-t t-ink" style="font-size:12.5px">IdP proof of v@corp</text>
+      <!-- arrows into store -->
+      <line x1="650" y1="156" x2="650" y2="192" class="s-ink" marker-end="url(#ai1)"/>
+      <text x="662" y="178" class="t-soft" style="font-size:11px">1 · seed row</text>
+      <line x1="650" y1="286" x2="650" y2="266" class="s-ink" marker-end="url(#ai1)"/>
+      <text x="662" y="281" class="t-soft" style="font-size:11px">2 · prove control</text>
+      <!-- laundering edge -->
+      <path d="M842,196 L842,136" fill="none" class="brc-s" stroke-width="2.4" marker-end="url(#ab1)"/>
+      <line x1="842" y1="232" x2="842" y2="200" class="brc-s" stroke-width="2.4"/>
+      <text x="856" y="176" class="brc-f" style="font-size:11px; font-weight:600">3 · laundered</text>
+      <text x="856" y="191" class="brc-f" style="font-size:11px; font-weight:600">→ full-auth</text>
+      <text x="650" y="360" text-anchor="middle" class="t-soft" style="font-size:12px">The edge that grants access lives <tspan fill="var(--breach)" font-weight="600">between</tspan> principals,</text>
+      <text x="650" y="378" text-anchor="middle" class="t-soft" style="font-size:12px">through the shared row — in no single automaton.</text>
+    </svg>
+  </div>
+  <figcaption><span class="fnum">Figure 1.</span> The same account, two models. <strong>Left</strong> — the classical target: a bad path to <code>full</code> inside one session, which single-session fuzzing can find. <strong>Right</strong> — the composite target: a trust <em class="term">level</em> raised by the victim's proof and later read by the attacker's pre-seeded session across one shared store row. The right-hand edge is not a path in either principal's own automaton; it exists only in their composition.</figcaption>
+</figure>
+
+<div class="prose">
+  <p>The move this paper makes is to stop asking <em class="term">which states are reachable</em> and start asking <em class="term">what justifies the privileges the system is currently holding</em>. That property has a name in access control — provenance — that has never been made the organising invariant for account-lifecycle security. Doing so is the contribution.</p>
+</div>
+
+<!-- ============ §2 ============ -->
+<div class="prose">
+  <h2 id="s2"><span class="sec">§2</span>A relational framework</h2>
+  <p>Fix four finite sets. <strong>Principals</strong> <span class="m">P</span> — the actors, including one or more attackers. <strong>Identifiers</strong> <span class="m">I</span> — emails, phone numbers, usernames, OAuth subjects, WebAuthn credential IDs. <strong>Channels</strong> <span class="m">C</span> — the media through which control is demonstrated: knowledge (a password), an email inbox, an SMS endpoint, a TOTP/WebAuthn authenticator, a federated IdP. <strong>Accounts</strong> <span class="m">A</span> — rows in the identity store. The system's state is not one session; it is the whole store plus every live session and every outstanding token, indexed across all of <span class="m">P</span>.</p>
+  <p>Trust is not a boolean. It is a small lattice, climbed one proof at a time.</p>
+</div>
+
+<figure>
+  <div class="frame">
+    <svg class="dgm" viewBox="0 0 940 330" role="img" aria-label="Two trust lattices. Top: identifier trust rising from unknown to claimed to pending to verified, where claiming needs no proof but the final verified step demonstrates inbox control. Bottom: session trust rising from anon to partial to full to step-up, each hop justified by a proof over a named channel.">
+      <defs>
+        <marker id="ai2" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="t-soft"/></marker>
+        <marker id="av2" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="val-f"/></marker>
+        <marker id="af2" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="t-faint"/></marker>
+      </defs>
+      <!-- row 1 -->
+      <text x="24" y="44" class="t-soft" style="font-size:11px; letter-spacing:1.4px; font-weight:600">IDENTIFIER TRUST</text>
+      <g class="mono-t" text-anchor="middle" style="font-size:13px">
+        <rect x="40" y="70" width="128" height="42" rx="9" class="nf ns"/><text x="104" y="96" class="t-ink">⊥ unknown</text>
+        <rect x="272" y="70" width="128" height="42" rx="9" class="nf ns"/><text x="336" y="96" class="t-ink">claimed</text>
+        <rect x="504" y="70" width="128" height="42" rx="9" class="nf ns"/><text x="568" y="96" class="t-ink">pending</text>
+        <rect x="736" y="70" width="150" height="42" rx="9" class="nf ns val-s" fill="var(--valid-soft)"/><text x="811" y="96" class="t-ink">verified</text>
+      </g>
+      <line x1="168" y1="91" x2="268" y2="91" class="grid" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#af2)"/>
+      <text x="218" y="82" text-anchor="middle" class="t-faint" style="font-size:10.5px">assert</text>
+      <text x="218" y="128" text-anchor="middle" class="t-faint" style="font-size:9.5px">no proof — attacker-settable</text>
+      <line x1="400" y1="91" x2="500" y2="91" class="s-ink" stroke-width="1.5" marker-end="url(#ai2)"/>
+      <text x="450" y="82" text-anchor="middle" class="t-soft" style="font-size:10.5px">challenge</text>
+      <text x="450" y="128" text-anchor="middle" class="t-faint mono-t" style="font-size:9.5px">c = email</text>
+      <line x1="632" y1="91" x2="732" y2="91" class="val-s" stroke-width="2" marker-end="url(#av2)"/>
+      <text x="682" y="82" text-anchor="middle" class="val-f" style="font-size:10.5px; font-weight:600">click link</text>
+      <text x="682" y="128" text-anchor="middle" class="t-faint mono-t" style="font-size:9.5px">proves inbox control</text>
+      <!-- row 2 -->
+      <text x="24" y="200" class="t-soft" style="font-size:11px; letter-spacing:1.4px; font-weight:600">SESSION TRUST</text>
+      <g class="mono-t" text-anchor="middle" style="font-size:13px">
+        <rect x="40" y="226" width="128" height="42" rx="9" class="nf ns"/><text x="104" y="252" class="t-ink">anon</text>
+        <rect x="272" y="226" width="128" height="42" rx="9" class="nf ns"/><text x="336" y="252" class="t-ink">partial</text>
+        <rect x="504" y="226" width="128" height="42" rx="9" class="nf ns"/><text x="568" y="252" class="t-ink">full</text>
+        <rect x="736" y="226" width="150" height="42" rx="9" class="nf ns acc-s"/><text x="811" y="252" class="t-ink">step-up</text>
+      </g>
+      <line x1="168" y1="247" x2="268" y2="247" class="s-ink" stroke-width="1.5" marker-end="url(#ai2)"/>
+      <text x="218" y="238" text-anchor="middle" class="t-soft" style="font-size:10.5px">password</text>
+      <text x="218" y="284" text-anchor="middle" class="t-faint mono-t" style="font-size:9.5px">c = knowledge</text>
+      <line x1="400" y1="247" x2="500" y2="247" class="val-s" stroke-width="2" marker-end="url(#av2)"/>
+      <text x="450" y="238" text-anchor="middle" class="val-f" style="font-size:10.5px; font-weight:600">mfa</text>
+      <text x="450" y="284" text-anchor="middle" class="t-faint mono-t" style="font-size:9.5px">totp · webauthn</text>
+      <line x1="632" y1="247" x2="732" y2="247" class="s-ink" stroke-width="1.5" marker-end="url(#ai2)"/>
+      <text x="682" y="238" text-anchor="middle" class="t-soft" style="font-size:10.5px">re-auth</text>
+      <text x="682" y="284" text-anchor="middle" class="t-faint mono-t" style="font-size:9.5px">fresh knowledge</text>
+      <!-- legend -->
+      <line x1="640" y1="312" x2="672" y2="312" class="val-s" stroke-width="2"/>
+      <text x="680" y="316" class="t-soft" style="font-size:10.5px">= hop that demonstrates control (a real proof event)</text>
+    </svg>
+  </div>
+  <figcaption><span class="fnum">Figure 2.</span> Two lattices, climbed by proof. The dashed <code>⊥→claimed</code> hop takes <em class="term">no</em> proof — anyone can assert any address — which is exactly why <code>claimed</code> is attacker-controllable and why an upgrade off it (§3, laundering) is dangerous. Green hops are where control is actually demonstrated. The security question is never "how high is the level?" but "what proof event carried it there, and does that proof match the resource being privileged?"</figcaption>
+</figure>
+
+<div class="prose">
+  <p>With those pieces the core objects are three short definitions and one invariant.</p>
+</div>
+
+<div class="env def plate">
+  <div class="lab"><span class="id">Definition 1</span> · Privileged binding</div>
+  <p>A <strong>privileged binding</strong> <span class="m">B</span> is any fact the system relies on to grant access: a <span class="m">session → account</span> binding, an <span class="m">identifier → account</span> "verified" binding, or a <span class="m">capability → session</span> grant. Each binding <em class="term">empowers</em> a principal to act, and <em class="term">privileges</em> a specific resource.</p>
+</div>
+
+<div class="env def plate">
+  <div class="lab"><span class="id">Definition 2</span> · Proof event</div>
+  <p>A <strong>proof event</strong> <span class="m">P = ⟨p, r, c, t⟩</span> records that principal <span class="m">p</span> demonstrated control of resource <span class="m">r</span> over channel <span class="m">c</span> at time <span class="m">t</span>. Entering a password proves knowledge of a secret; clicking an emailed link proves control of an inbox; completing an IdP flow proves control of a federated account.</p>
+</div>
+
+<div class="env def plate">
+  <div class="lab"><span class="id">Definition 3</span> · Provenance &amp; justification</div>
+  <p><span class="m">prov(B)</span> is the set of proof events the system <em class="term">actually used</em> to justify binding <span class="m">B</span>. The predicate <span class="m">justifies(prov(B), B)</span> holds iff those proof events demonstrate control of <em class="term">exactly</em> the resource <span class="m">B</span> privileges, by the principal <span class="m">B</span> empowers, within <span class="m">B</span>'s freshness window.</p>
+</div>
+
+<div class="env inv plate">
+  <div class="lab"><span class="id">Invariant TPI</span> · Trust-Provenance Integrity</div>
+  <p>Every privileged binding the system holds, in every reachable configuration, is justified by its own provenance:</p>
+  <div class="formula">∀ reachable G . ∀ B ∈ privileged(G) . justifies( prov(B), B )</div>
+  <p style="margin-top:.75em">A <strong>vulnerability</strong> is a reachable configuration <span class="m">G</span> holding some binding <span class="m">B</span> with <span class="m">¬justifies(prov(B), B)</span>. Every entry in the §5 taxonomy is one shape of that negation.</p>
+</div>
+
+<!-- ============ §3 ============ -->
+<div class="prose">
+  <h2 id="s3"><span class="sec">§3</span>Three ways provenance fails</h2>
+  <p>Negating <span class="m">justifies</span> is not open-ended. A binding's provenance can be wrong in exactly three ways: it can be <em class="term">missing</em>, it can point at the <em class="term">wrong resource</em>, or it can be <em class="term">upgraded</em> from something weaker. These are the whole failure surface.</p>
+</div>
+
+<figure>
+  <div class="frame">
+    <svg class="dgm" viewBox="0 0 960 300" role="img" aria-label="Four columns. Valid: a proof justifies a binding with a solid green arrow. Gap: a binding with no proof at all. Forgery: a proof that demonstrates control of the wrong resource. Laundering: a weak or other-principal fact upgraded to a verified binding without re-proof.">
+      <defs>
+        <marker id="av3" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="val-f"/></marker>
+        <marker id="ab3" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="brc-f"/></marker>
+      </defs>
+      <!-- columns geometry: x0 = 24,258,492,726 ; width 210 -->
+      <!-- headers -->
+      <g style="font-size:11px; font-weight:600; letter-spacing:1px" text-anchor="middle">
+        <rect x="24" y="24" width="210" height="26" rx="13" fill="var(--valid-soft)"/><text x="129" y="41" class="val-f">VALID</text>
+        <rect x="258" y="24" width="210" height="26" rx="13" fill="var(--breach-soft)"/><text x="363" y="41" class="brc-f">GAP</text>
+        <rect x="492" y="24" width="210" height="26" rx="13" fill="var(--breach-soft)"/><text x="597" y="41" class="brc-f">FORGERY</text>
+        <rect x="726" y="24" width="210" height="26" rx="13" fill="var(--breach-soft)"/><text x="831" y="41" class="brc-f">LAUNDERING</text>
+      </g>
+      <!-- VALID -->
+      <g class="mono-t" text-anchor="middle" style="font-size:11.5px">
+        <rect x="30" y="96" width="86" height="40" rx="9" class="val-s" fill="var(--valid-soft)"/><text x="73" y="121" class="t-ink">proof P</text>
+        <rect x="142" y="96" width="86" height="40" rx="9" class="nf ns"/><text x="185" y="121" class="t-ink">binding B</text>
+      </g>
+      <line x1="116" y1="116" x2="138" y2="116" class="val-s" stroke-width="2" marker-end="url(#av3)"/>
+      <text x="129" y="164" text-anchor="middle" class="t-soft" style="font-size:11px"><tspan x="129" dy="0">P proves control of</tspan><tspan x="129" dy="14">exactly B's resource.</tspan></text>
+      <!-- GAP -->
+      <g class="mono-t" text-anchor="middle" style="font-size:11.5px">
+        <rect x="264" y="96" width="86" height="40" rx="9" fill="none" class="brc-s" stroke-dasharray="5 4"/><text x="307" y="121" class="brc-f">∅</text>
+        <rect x="376" y="96" width="86" height="40" rx="9" class="nf ns"/><text x="419" y="121" class="t-ink">binding B</text>
+      </g>
+      <line x1="350" y1="116" x2="372" y2="116" class="brc-s" stroke-width="2" stroke-dasharray="3 3" marker-end="url(#ab3)"/>
+      <text x="363" y="164" text-anchor="middle" class="t-soft" style="font-size:11px"><tspan x="363" dy="0">Binding with no proof:</tspan><tspan x="363" dy="14">IDOR, unauth transition.</tspan></text>
+      <!-- FORGERY -->
+      <g class="mono-t" text-anchor="middle" style="font-size:11px">
+        <rect x="498" y="96" width="90" height="40" rx="9" class="brc-s" fill="var(--breach-soft)"/><text x="543" y="115" class="t-ink">proof P</text><text x="543" y="129" class="brc-f" style="font-size:9.5px">wrong r</text>
+        <rect x="614" y="96" width="86" height="40" rx="9" class="nf ns"/><text x="657" y="121" class="t-ink">binding B</text>
+      </g>
+      <line x1="588" y1="116" x2="610" y2="116" class="brc-s" stroke-width="2" marker-end="url(#ab3)"/>
+      <text x="580" y="102" class="brc-f" style="font-size:13px; font-weight:700">✕</text>
+      <text x="597" y="164" text-anchor="middle" class="t-soft" style="font-size:11px"><tspan x="597" dy="0">Proof controls the wrong</tspan><tspan x="597" dy="14">thing: reset-to-attacker,</tspan><tspan x="597" dy="14">audience confusion.</tspan></text>
+      <!-- LAUNDERING -->
+      <g class="mono-t" text-anchor="middle" style="font-size:10.5px">
+        <rect x="726" y="94" width="96" height="44" rx="9" class="nf2 ns"/><text x="774" y="112" class="t-soft">weak/old</text><text x="774" y="127" class="t-soft">fact · A</text>
+        <rect x="844" y="94" width="92" height="44" rx="9" class="nf ns val-s"/><text x="890" y="112" class="t-ink">verified</text><text x="890" y="127" class="t-ink">B · V</text>
+      </g>
+      <path d="M822,113 L841,113" class="brc-s" stroke-width="1.8" marker-end="url(#ab3)"/>
+      <path d="M822,119 L841,119" class="brc-s" stroke-width="1.8"/>
+      <text x="831" y="176" text-anchor="middle" class="t-soft" style="font-size:11px"><tspan x="831" dy="0">Weaker / other-principal</tspan><tspan x="831" dy="14">fact upgraded with no</tspan><tspan x="831" dy="14">re-proof: pre-hijacking,</tspan><tspan x="831" dy="14">unverified IdP email.</tspan></text>
+      <!-- legend -->
+      <g transform="translate(0,262)">
+        <line x1="24" y1="0" x2="52" y2="0" class="brc-s" stroke-width="2" stroke-dasharray="3 3"/><text x="60" y="4" class="t-soft" style="font-size:10.5px">dotted = gap</text>
+        <line x1="190" y1="0" x2="218" y2="0" class="brc-s" stroke-width="2"/><text x="226" y="4" class="t-soft" style="font-size:10.5px">solid = forgery</text>
+        <line x1="372" y1="-3" x2="400" y2="-3" class="brc-s" stroke-width="1.8"/><line x1="372" y1="3" x2="400" y2="3" class="brc-s" stroke-width="1.8"/><text x="408" y="4" class="t-soft" style="font-size:10.5px">double = laundering</text>
+      </g>
+    </svg>
+  </div>
+  <figcaption><span class="fnum">Figure 3.</span> The complete failure surface of <span class="m">justifies</span>. <strong>Gap</strong> and <strong>forgery</strong> are visible within one session — a missing check, a proof delivered to the wrong place. <strong>Laundering</strong> is the dangerous one: the level is legitimately high, so every local guard is satisfied; what is wrong is that the <em class="term">proof underneath it</em> belongs to a different resource, an older moment, or another principal. Laundering is why §4 exists.</figcaption>
+</figure>
+
+<!-- ============ §4 ============ -->
+<div class="prose">
+  <h2 id="s4"><span class="sec">§4</span>Composition-Blindness</h2>
+  <p>Here is the load-bearing claim, and the reason single-session modeling cannot be patched into sufficiency. It is one observation about the difference between a <em class="term">level</em> and its <em class="term">provenance</em>.</p>
+</div>
+
+<div class="env thm plate">
+  <div class="lab"><span class="id">Theorem 1</span> · Composition-Blindness <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--ink-soft)">(informal)</span></div>
+  <p>Let subsystems <span class="m">S₁…Sₙ</span> — password, OAuth-link, recovery, MFA, email-change — each be a single-principal automaton satisfying the classical property "no unintended path reaches <code>full</code>." Let <span class="m">⊗Sᵢ</span> be their composition over a shared identity store, with the natural interface: a proof event emitted in <span class="m">Sᵢ</span>'s alphabet raises a trust level that <span class="m">Sⱼ</span>'s guard reads. Then <span class="m">⊗Sᵢ</span> can hold a reachable configuration violating <strong>TPI</strong> — even though no <span class="m">Sᵢ</span> violates its local property.</p>
+  <div class="proof">
+    <b>Proof sketch.</b> Each <span class="m">Sᵢ</span>'s guard is a predicate over a <em class="term">local trust level</em>. A level is a scalar. Provenance is a <em class="term">pair</em> — <span class="m">(who proved, which resource)</span>. Composition transports the scalar across the interface but not the pair: <span class="m">Sᵢ</span> can raise identifier <code>e</code> to <code>verified</code> on behalf of principal <span class="m">V</span> (the victim's IdP proof), while <span class="m">Sⱼ</span>'s guard reads only "<code>e</code> is verified" and binds it into a session whose principal is <span class="m">A</span> — because the store row is shared and only the level crossed. The violating configuration is reachable in <span class="m">⊗Sᵢ</span> yet is a path in <em class="term">no</em> <span class="m">Sᵢ</span>: it requires two principals' timelines to interleave through one shared row, an interleaving no single-principal model contains. Hence any method whose unit of analysis is one session is blind to it by construction, not by omission. <span class="qed">∎</span>
+  </div>
+</div>
+
+<div class="prose">
+  <p>The corollary is uncomfortable and useful: a system can be assembled entirely from subsystems that each pass their own state-machine audit and still be trivially takeover-able. "Secure by parts" is not a weaker version of secure; for this bug class it is unrelated to it. That is the precise sense in which <em class="term">levels compose and provenance does not.</em></p>
+</div>
+
+<!-- ============ §5 ============ -->
+<div class="prose">
+  <h2 id="s5"><span class="sec">§5</span>A taxonomy by failure</h2>
+  <p>The framework earns its keep if disparate, separately-named attacks turn out to be one invariant broken three ways. They do. The right-hand column also states where each bug <em class="term">lives</em> — and therefore what kind of model can see it.</p>
+</div>
+
+<div class="tablewrap plate">
+  <table>
+    <thead>
+      <tr><th>Attack class</th><th>Failure</th><th>What is laundered / missing</th><th>Where it lives</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="attack">Pre-account-hijacking</span></td>
+        <td><span class="chip laundering">Laundering</span></td>
+        <td>attacker-seeded row (<span class="m">claimed, prov=A</span>) upgraded to <span class="m">verified, prov=V</span></td>
+        <td>composition · 2 principals, shared row</td>
+      </tr>
+      <tr>
+        <td><span class="attack">OAuth "link to existing account" via unverified IdP email</span></td>
+        <td><span class="chip laundering">Laundering</span></td>
+        <td>an IdP <span class="m">email</span> claim never verified, treated as a verified binding</td>
+        <td>cross-channel · IdP → store</td>
+      </tr>
+      <tr>
+        <td><span class="attack">Reset token survives email / password change</span></td>
+        <td><span class="chip laundering">Laundering</span></td>
+        <td>proof pinned to the old inbox consumed after the row was rebound</td>
+        <td>provenance-breaking transition · temporal</td>
+      </tr>
+      <tr>
+        <td><span class="attack">"Remember this device" survives password reset / step-up removal</span></td>
+        <td><span class="chip laundering">Laundering</span></td>
+        <td>pre-MFA session proof carried past the MFA guard</td>
+        <td>provenance-breaking transition · temporal</td>
+      </tr>
+      <tr>
+        <td><span class="attack">Host-header / cache-poisoned reset link</span></td>
+        <td><span class="chip forgery">Forgery</span></td>
+        <td>reset proof delivered to an attacker-controlled resource</td>
+        <td>single-session (proof → wrong <span class="m">r</span>)</td>
+      </tr>
+      <tr>
+        <td><span class="attack">SAML / OIDC audience or subject confusion</span></td>
+        <td><span class="chip forgery">Forgery</span></td>
+        <td>an assertion for resource <span class="m">R</span> accepted as proof for <span class="m">R′</span></td>
+        <td>cross-channel</td>
+      </tr>
+      <tr>
+        <td><span class="attack">IDOR on user-id in a state-changing endpoint</span></td>
+        <td><span class="chip gap">Gap</span></td>
+        <td>a privileged action with empty provenance</td>
+        <td>single-session (still caught classically)</td>
+      </tr>
+      <tr>
+        <td><span class="attack">JWT <span class="m">alg</span> / signature bypass</span></td>
+        <td><span class="chip oos">Out of scope</span></td>
+        <td>— broken cryptographic integrity, not broken provenance —</td>
+        <td>crypto layer, not the state machine</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="prose">
+  <p>Two things to read off the table. First, every <em class="term">laundering</em> row lives in composition or in time — precisely the region Theorem 1 says single-session models cannot reach. Second, the framework has an honest edge: JWT signature bugs are real ATOs and are <em class="term">not</em> provenance failures. A theory that explained everything would explain nothing; this one draws its own boundary.</p>
+</div>
+
+<!-- ============ §6 ============ -->
+<div class="prose">
+  <h2 id="s6"><span class="sec">§6</span>Worked exploit: pre-hijacking as laundering</h2>
+  <p>Read the canonical pre-account-hijack through the lens. The attacker never breaks a login. They arrange for a legitimate future proof — the victim's own — to land on a row they already control, and let the system launder it.</p>
+</div>
+
+<figure>
+  <div class="frame">
+    <svg class="dgm" viewBox="0 0 900 500" role="img" aria-label="A three-lifeline sequence. The attacker pre-registers the victim's email, creating a store row at trust claimed with attacker credentials. The attacker holds a second binding. Later the victim logs in via SSO, proving control of the address; the store merges into the existing row and upgrades it to verified but does not revoke the attacker's binding. The attacker then uses the pre-seeded binding for full authenticated access, an account takeover.">
+      <defs>
+        <marker id="ai6" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="t-soft"/></marker>
+        <marker id="ab6" markerWidth="10" markerHeight="10" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="brc-f"/></marker>
+      </defs>
+      <!-- heads -->
+      <g text-anchor="middle">
+        <rect x="70" y="24" width="160" height="38" rx="9" class="nf ns"/><text x="150" y="48" class="t-ink" style="font-size:13px; font-weight:500">Attacker</text>
+        <rect x="360" y="24" width="180" height="38" rx="9" class="nf2 ns"/><text x="450" y="48" class="t-ink" style="font-size:13px; font-weight:500">Identity store</text>
+        <rect x="670" y="24" width="160" height="38" rx="9" class="nf ns"/><text x="750" y="48" class="t-ink" style="font-size:13px; font-weight:500">Victim · v@corp</text>
+      </g>
+      <!-- lifelines -->
+      <line x1="150" y1="62" x2="150" y2="470" class="grid" stroke-dasharray="3 5"/>
+      <line x1="450" y1="62" x2="450" y2="470" class="grid" stroke-dasharray="3 5"/>
+      <line x1="750" y1="62" x2="750" y2="470" class="grid" stroke-dasharray="3 5"/>
+      <!-- t1 -->
+      <text x="300" y="92" text-anchor="middle" class="t-soft mono-t" style="font-size:11.5px">register(email = v@corp)</text>
+      <line x1="150" y1="100" x2="446" y2="100" class="s-ink" marker-end="url(#ai6)"/>
+      <rect x="360" y="112" width="180" height="46" rx="7" class="nf2 ns"/>
+      <text x="372" y="130" class="mono-t t-soft" style="font-size:10.5px">create row {trust: claimed,</text>
+      <text x="372" y="148" class="mono-t t-soft" style="font-size:10.5px">cred: attacker, prov: A}</text>
+      <text x="300" y="83" text-anchor="middle" class="t-faint" style="font-size:10px">t1 · before the victim exists</text>
+      <!-- t2 -->
+      <text x="300" y="196" text-anchor="middle" class="t-soft mono-t" style="font-size:11.5px">plant recovery / API token</text>
+      <line x1="150" y1="204" x2="446" y2="204" class="s-ink" marker-end="url(#ai6)"/>
+      <text x="300" y="187" text-anchor="middle" class="t-faint" style="font-size:10px">t2 · a second binding to the same row</text>
+      <!-- t3 -->
+      <text x="600" y="256" text-anchor="middle" class="t-soft mono-t" style="font-size:11.5px">SSO login — IdP proves control</text>
+      <line x1="750" y1="264" x2="454" y2="264" class="s-ink" marker-end="url(#ai6)"/>
+      <text x="600" y="247" text-anchor="middle" class="t-faint" style="font-size:10px">t3 · the victim's real, legitimate proof</text>
+      <!-- t4 laundering -->
+      <rect x="352" y="286" width="196" height="60" rx="8" class="brc-s" fill="var(--breach-soft)" stroke-width="1.6"/>
+      <text x="450" y="306" text-anchor="middle" class="brc-f mono-t" style="font-size:11px; font-weight:600">MERGE → trust: verified</text>
+      <text x="450" y="323" text-anchor="middle" class="t-soft mono-t" style="font-size:10px">prov upgraded to V</text>
+      <text x="450" y="338" text-anchor="middle" class="brc-f mono-t" style="font-size:10px; font-weight:600">A's binding NOT revoked</text>
+      <text x="450" y="368" text-anchor="middle" class="t-faint" style="font-size:10px">t4 · the laundering transition — a scalar rose, a pair was dropped</text>
+      <!-- t5 ATO -->
+      <text x="300" y="406" text-anchor="middle" class="brc-f mono-t" style="font-size:11.5px; font-weight:600">use pre-seeded binding</text>
+      <line x1="150" y1="414" x2="446" y2="414" class="brc-s" stroke-width="2" marker-end="url(#ab6)"/>
+      <line x1="446" y1="440" x2="154" y2="440" class="brc-s" stroke-width="2" marker-end="url(#ab6)"/>
+      <text x="300" y="434" text-anchor="middle" class="brc-f mono-t" style="font-size:11px">full-auth over a verified account</text>
+      <text x="150" y="464" text-anchor="middle" class="brc-f" style="font-size:12px; font-weight:700">✕ ACCOUNT TAKEOVER</text>
+    </svg>
+  </div>
+  <figcaption><span class="fnum">Figure 4.</span> Pre-account-hijacking, annotated. Nothing here is an unintended path: the attacker's registration is a feature, the victim's SSO proof is genuine, the merge is intended. The only defect is at <strong>t4</strong> — the row's trust level was raised by <span class="m">V</span>'s proof while <span class="m">A</span>'s binding, whose provenance no longer justifies anything, was left attached. <strong>TPI</strong> forbids exactly this: an identity-mutating transition must re-assert justification for <em class="term">every</em> binding on the row, revoking those it can no longer justify.</figcaption>
+</figure>
+
+<!-- ============ §7 ============ -->
+<div class="prose">
+  <h2 id="s7"><span class="sec">§7</span>From theory to counterexamples</h2>
+  <p>A theory of this class is only worth the tooling it enables. Two tracks operationalize it — one for when you have the source, one for when you have only the endpoint. Both begin by naming the alphabet and tagging every symbol with the provenance triple, because that tag is the thing the classical models throw away.</p>
+</div>
+
+<div class="code-note plate">
+<span class="c"># the input alphabet, each symbol tagged ⟨principal, channel, resource⟩</span><br>
+Σ = { <span class="k">login_ok</span>, <span class="k">login_bad</span>, <span class="k">reset_req</span>, <span class="k">reset_use</span>, <span class="k">oauth_link</span>, <span class="k">oauth_cb</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">mfa_enroll</span>, <span class="k">mfa_ok</span>, <span class="k">email_change_req</span>, <span class="k">email_change_ok</span>, <span class="k">logout</span> }<br>
+annotate: σ ↦ ⟨ p ∈ P, c ∈ C, r ∈ I ⟩ &nbsp;<span class="c"># the pair the classical model drops</span>
+</div>
+
+<figure>
+  <div class="frame">
+    <svg class="dgm" viewBox="0 0 940 440" role="img" aria-label="A two-track method. From a shared step defining and annotating the alphabet, a white-box track builds a relational Alloy model, bounded-checks the TPI invariant, and returns a counterexample instance. A black-box track learns a per-subsystem Mealy machine with LearnLib, composes the machines over a shared store, replays cross-principal proof-event sequences, and flags any invariant break. Both tracks converge on minimize and validate against the target.">
+      <defs>
+        <marker id="aa7" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="acc-f"/></marker>
+        <marker id="ab7" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" class="brc-f"/></marker>
+      </defs>
+      <!-- shared -->
+      <rect x="230" y="20" width="480" height="52" rx="10" class="acc-bg acc-s"/>
+      <text x="470" y="42" text-anchor="middle" class="acc-f" style="font-size:12px; font-weight:600; letter-spacing:.5px">1 · DEFINE &amp; ANNOTATE THE ALPHABET</text>
+      <text x="470" y="60" text-anchor="middle" class="t-soft mono-t" style="font-size:11px">Σ with ⟨principal, channel, resource⟩ on every symbol</text>
+      <!-- track labels -->
+      <text x="60" y="104" class="t-faint" style="font-size:10.5px; letter-spacing:1px; font-weight:600">WHITE-BOX · you have the source</text>
+      <text x="560" y="104" class="t-faint" style="font-size:10.5px; letter-spacing:1px; font-weight:600">BLACK-BOX · you have the endpoint</text>
+      <!-- split arrows -->
+      <path d="M380,72 C 300,92 250,96 235,118" fill="none" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <path d="M560,72 C 640,92 690,96 705,118" fill="none" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <!-- boxes track A -->
+      <g text-anchor="middle">
+        <rect x="40" y="122" width="390" height="56" rx="9" class="nf ns"/>
+        <text x="235" y="145" class="t-ink" style="font-size:12.5px; font-weight:500">2a · Alloy relational model</text>
+        <text x="235" y="164" class="t-soft mono-t" style="font-size:10.5px">principals × identifiers × rows · pred justifies(prov,B)</text>
+        <rect x="40" y="212" width="390" height="56" rx="9" class="nf ns"/>
+        <text x="235" y="235" class="t-ink" style="font-size:12.5px; font-weight:500">3a · bounded check</text>
+        <text x="235" y="254" class="t-soft mono-t" style="font-size:10.5px">∀ G within scope · TPI holds?</text>
+        <rect x="40" y="302" width="390" height="56" rx="9" class="brc-s" fill="var(--breach-soft)"/>
+        <text x="235" y="325" class="t-ink" style="font-size:12.5px; font-weight:600">4a · counterexample instance</text>
+        <text x="235" y="344" class="t-soft mono-t" style="font-size:10.5px">a concrete store + trace violating TPI</text>
+      </g>
+      <line x1="235" y1="178" x2="235" y2="208" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <line x1="235" y1="268" x2="235" y2="298" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <!-- boxes track B -->
+      <g text-anchor="middle">
+        <rect x="510" y="122" width="390" height="56" rx="9" class="nf ns"/>
+        <text x="705" y="145" class="t-ink" style="font-size:12.5px; font-weight:500">2b · LearnLib L* per subsystem</text>
+        <text x="705" y="164" class="t-soft mono-t" style="font-size:10.5px">learn the Mealy machine each flow really implements</text>
+        <rect x="510" y="212" width="390" height="56" rx="9" class="nf ns"/>
+        <text x="705" y="231" class="t-ink" style="font-size:12.5px; font-weight:500">3b · compose over a shared store</text>
+        <text x="705" y="250" class="t-soft mono-t" style="font-size:10.5px">replay cross-principal proof-event</text>
+        <text x="705" y="263" class="t-soft mono-t" style="font-size:10.5px">interleavings</text>
+        <rect x="510" y="302" width="390" height="56" rx="9" class="brc-s" fill="var(--breach-soft)"/>
+        <text x="705" y="325" class="t-ink" style="font-size:12.5px; font-weight:600">4b · invariant break = ATO candidate</text>
+        <text x="705" y="344" class="t-soft mono-t" style="font-size:10.5px">a level read without matching provenance</text>
+      </g>
+      <line x1="705" y1="178" x2="705" y2="208" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <line x1="705" y1="268" x2="705" y2="298" class="acc-s" stroke-width="1.6" marker-end="url(#aa7)"/>
+      <!-- converge -->
+      <rect x="285" y="392" width="370" height="40" rx="10" class="acc-bg acc-s"/>
+      <text x="470" y="416" text-anchor="middle" class="acc-f" style="font-size:12px; font-weight:600">5 · minimize → validate on the target</text>
+      <path d="M235,358 C 235,382 320,390 355,398" fill="none" class="brc-s" stroke-width="1.6" marker-end="url(#ab7)"/>
+      <path d="M705,358 C 705,382 620,390 585,398" fill="none" class="brc-s" stroke-width="1.6" marker-end="url(#ab7)"/>
+    </svg>
+  </div>
+  <figcaption><span class="fnum">Figure 5.</span> Two tracks, one invariant. White-box (Alloy) is <em class="term">relational</em> — it quantifies over multiple accounts and principals at once, which is what surfaces laundering that a single-trace checker never poses. Black-box adapts protocol state fuzzing: learn each subsystem's real machine, then do the thing single-session fuzzing never does — <em class="term">compose the learned machines over a shared row and replay one principal's proof into another's guard</em>. A divergence is a TPI break, i.e. an ATO candidate to minimize and confirm.</figcaption>
+</figure>
+
+<!-- ============ §8 ============ -->
+<div class="prose">
+  <h2 id="s8"><span class="sec">§8</span>Falsifiable predictions</h2>
+  <p>A thesis that cannot be wrong is not a thesis. Three predictions make this one refutable, and each names what would sink it.</p>
+  <ul class="preds">
+    <li><span class="pid">P1</span><p>There exist deployed auth systems with <em class="term">zero</em> findings under single-session / protocol-state fuzzing that yield ATO under two-principal proof-event replay (§7, track B).<span class="refute">Refuted if: composition never adds a finding that a single-session pass could not have reached.</span></p></li>
+    <li><span class="pid">P2</span><p>Enforcing the TPI clause set — provenance-tag every row, and re-justify (revoke-and-rebind) on every identity-mutating transition — closes the entire laundering column without per-attack patches.<span class="refute">Refuted if: a laundering ATO survives full TPI enforcement — then the invariant is incomplete and must be refined.</span></p></li>
+    <li><span class="pid">P3</span><p>Forgery-class bugs are detectable single-session; laundering-class strictly requires ≥2 principals or a temporal gap between proof and use.<span class="refute">Refuted if: a laundering bug is caught by a faithful single-principal model — then the §5 partition is wrong.</span></p></li>
+  </ul>
+</div>
+
+<!-- ============ §9 ============ -->
+<div class="prose">
+  <h2 id="s9"><span class="sec">§9</span>Novelty, prior art, and limits</h2>
+  <p>The ingredients are not new, and pretending otherwise would be the fastest way to be dismissed. Confused-deputy (Hardy) named the shape of trusting the wrong actor; provenance is a settled idea in access control; protocol state fuzzing (de Ruiter &amp; Poll, USENIX 2015) is the black-box template; the web-infrastructure OAuth models (Fett–Küsters–Schmitz) supply formal SSO analysis; and the pre-hijacking catalog (Sudhodanan &amp; Paverd, 2022) is the empirical spark.</p>
+  <p>The contribution is the synthesis and one argument. Specifically: <strong>(a)</strong> naming <em class="term">trust-provenance integrity</em> as the single safety property under which these separately-named ATOs are <em class="term">one</em> bug broken three ways; <strong>(b)</strong> the Composition-Blindness argument (§4) that isolates <em class="term">why</em> the dominant class evades single-session modeling — levels compose, provenance does not; and <strong>(c)</strong> a relational method that checks that invariant rather than reachability. Prior work found the <em class="term">phenomenon</em>; this supplies the <em class="term">invariant it violates</em> and the reason it is systematically missed.</p>
+  <p>The limits are real and worth stating plainly. The model is only as good as the state variables chosen — abstract away the one the bug lives in and TPI will "prove" a safety it does not have, so in black-box use it is a hypothesis generator, never a safety certificate. Not all ATO is provenance: signature bugs, memory corruption, SSRF-to-metadata, and social engineering sit outside the boundary the §5 table draws on purpose. The black-box track infers behavior, not intent, and inherits every blind spot of automata learning. And the temporal side — freshness windows, TOCTOU races between proof and use — is sketched here as ordering, not yet formalized as timed automata. Each of those is the next paper.</p>
+</div>
+
+<hr class="rule">
+
+<footer>
+  <div class="prose" style="max-width:var(--plate)">
+    <p class="eyebrow">Colophon</p>
+    <p style="margin-top:.8em">Working paper on <b style="color:var(--ink)">Trust-Provenance Integrity (TPI)</b> — a compositional state-machine account of authentication failure. Draft 0.1, prepared for independent security research, 2026-09-15. Diagrams are hand-drawn to the argument, not decoration; each states one claim.</p>
+    <p class="refs"><b>Prior art referenced.</b> J. de Ruiter &amp; E. Poll, <em>Protocol State Fuzzing of TLS Implementations</em>, USENIX Security 2015 · D. Fett, R. Küsters &amp; G. Schmitz, <em>An Expressive Model of the Web Infrastructure</em> / OAuth &amp; OIDC analyses · A. Sudhodanan &amp; A. Paverd, <em>Pre-hijacking Attacks on Web User Accounts</em>, 2022 · N. Hardy, <em>The Confused Deputy</em>, 1988 · D. Jackson, <em>Software Abstractions</em> (Alloy).</p>
+  </div>
+</footer>
+
+</main>
