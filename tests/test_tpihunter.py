@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import unittest
 
+from tpihunter.dedup import build_plan, deduplicate
 from tpihunter.enumerator import ACTIONS, enumerate_plans
 from tpihunter.harness import run_plan
 from tpihunter.learner import LStar
@@ -24,6 +25,15 @@ from tpihunter.synthesis import specs_from_machine
 from tpihunter.types import Principal
 
 EMAIL = "victim@corp.example"
+
+
+def _vuln_verdict_fn(attacker, victim):
+    control = {victim.name: {EMAIL}}
+
+    def fn(plan):
+        a = MockAdapter(patched=False, control=control)
+        return run_plan(a, plan, AtoOracle(a, attacker, victim))[0]
+    return fn
 
 
 def _principals():
@@ -104,6 +114,38 @@ class TestLearner(unittest.TestCase):
         m = _learn()
         self.assertEqual(m.run(("sso_login",)), "OK_VERIFIED")
         self.assertEqual(m.run(("register",)), "OK_SESSION")
+
+
+class TestDedup(unittest.TestCase):
+    def test_collapses_to_two_distinct_bugs(self):
+        attacker, victim = _principals()
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        vuln = _vuln_verdict_fn(attacker, victim)
+        clusters = deduplicate(cands, attacker, victim, EMAIL, vuln)
+        self.assertEqual(len(clusters), 2)
+        self.assertEqual(sorted(c.clause_id for c in clusters), ["TPI-1", "TPI-4"])
+
+    def test_every_fired_candidate_is_clustered(self):
+        attacker, victim = _principals()
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        vuln = _vuln_verdict_fn(attacker, victim)
+        fired = [c for c in cands if vuln(c.plan).severity.value == "takeover"]
+        clusters = deduplicate(cands, attacker, victim, EMAIL, vuln)
+        self.assertEqual(sum(c.size for c in clusters), len(fired))
+
+    def test_representative_is_minimal_and_reproduces(self):
+        attacker, victim = _principals()
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        vuln = _vuln_verdict_fn(attacker, victim)
+        clusters = deduplicate(cands, attacker, victim, EMAIL, vuln)
+        for cl in clusters:
+            # the minimal repro still triggers a takeover of the cluster's clause
+            v = vuln(build_plan(tuple(cl.representative), attacker, victim, EMAIL))
+            self.assertEqual(v.severity.value, "takeover")
+            self.assertEqual(v.clause_id, cl.clause_id)
+            # and it is genuinely minimal: TPI-1 in 2 steps, TPI-4 in 3
+            expected_len = 2 if cl.clause_id == "TPI-1" else 3
+            self.assertEqual(len(cl.representative), expected_len)
 
 
 class TestSynthesis(unittest.TestCase):

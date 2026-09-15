@@ -70,6 +70,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `mock_target.py` | a deliberately vulnerable in-memory target + its adapter |
 | `probes.py` | hand-written TPI probe plans |
 | `enumerator.py` | **generates** probe plans — composition-relevant interleavings |
+| `dedup.py` | collapses near-duplicate findings to distinct bugs (minimization + signature) |
 | `sul.py` | System-Under-Learning interface + a single-account view of the mock |
 | `learner.py` | L* Mealy-machine learner (black-box automata learning) |
 | `synthesis.py` | turns a learned machine into the enumerator's action model |
@@ -118,6 +119,23 @@ with no hand-written probe, finds a distinct one (**TPI-4**, session survives a
 victim's password reset). Every finding closes under the patch — the enumerator
 proposes, the oracle disposes.
 
+## Deduplicating findings
+
+The enumerator over-generates on purpose (every interleaving, every padding), so one
+bug appears as dozens of near-identical findings. `dedup.py` collapses them to the
+distinct bugs, driven by the authoritative oracle verdict:
+
+1. **Causal minimization** — delta-debug each fired probe against the oracle, dropping
+   steps as long as the verdict stays a takeover *of the same clause*. What survives
+   is the minimal repro.
+2. **Causal signature** — group by `(clause, set of effect-classes in the core)`.
+   Role, count, and interleaving are abstracted away (the clause already encodes the
+   who/what), so "attacker seeds, victim raises" is one TPI-1 bug however it
+   interleaves.
+
+On the mock, **106 findings collapse to 2 distinct bugs** (TPI-1 in 2 steps, TPI-4 in
+3), each with a minimal repro — see the tail of `python3 -m tpihunter.enum_demo`.
+
 ## Automata learning
 
 `learner.py` learns the Mealy machine a target actually implements from black-box
@@ -152,8 +170,8 @@ longer trusted. Pass the result via `enumerate_plans(..., specs=synthesized)`.
 
 ## Roadmap
 
-- **Semantic dedup**: the enumerator over-generates order/padding variants
-  (124 candidates, 2 distinct bugs); collapse plans by causal signature.
+- **Evidence bundle**: turn each dedup `Cluster` (verdict + minimal repro + laundered
+  proof + canary evidence) into a shareable, bug-bounty-ready report.
 - **W-method conformance oracle**: replace the learner's random-walk equivalence
   check so the learned machine is sound within a bound.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*

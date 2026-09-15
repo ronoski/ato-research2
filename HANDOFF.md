@@ -54,7 +54,7 @@ Then read, in this order:
 4. **the code**, in dependency order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
    `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
-   `sul.py` → `learner.py` → `synthesis.py`
+   `dedup.py` → `sul.py` → `learner.py` → `synthesis.py`
 
 ---
 
@@ -78,6 +78,7 @@ The loop the project implements:
 | `harness.py` | `Plan`/`Step` + `run_plan`: probes as data, run with oracle checkpoints |
 | `probes.py` | hand-written TPI probe plans |
 | `enumerator.py` | **generates** probes — composition-relevant interleavings; takes a `specs` model |
+| `dedup.py` | collapses fired findings to distinct bugs (causal minimization + signature) |
 | `sul.py` | System-Under-Learning interface + single-account view of the mock |
 | `learner.py` | Angluin's L* Mealy learner (black-box automata learning) |
 | `synthesis.py` | learned machine → the enumerator's `ActionSpec` model (closes the loop) |
@@ -111,9 +112,12 @@ as invitations to improve:
   the "attack". The grading treats confluence as decisive at assess-time regardless —
   convince yourself this is sound, and that it can't false-positive on a legitimately
   shared/tenant account.
-- **The enumerator over-generates** — 124 candidates collapse to 2 distinct bugs
-  (order/padding variants). That's milestone **M5** (semantic dedup by causal
-  signature). Low-risk, high-readability win.
+- **Enumerator over-generation is now handled by `dedup.py`** (M5): 106 findings →
+  2 distinct bugs via causal minimization + a `(clause, effect-set)` signature. The
+  one thing to watch: the signature is deliberately coarse (drops role/count), so two
+  genuinely different bugs sharing a clause *and* effect-set would merge. Fine on the
+  mock; if a real target shows a false merge, make the signature finer — don't just
+  raise the cluster count.
 - **The mock is a simplification.** Its bugs and patches are illustrative. The
   reset-token / inbox model in `mock_target.py` is slightly quirky (stale links after
   consume) — verify it doesn't create phantom states in the learner. **If you add a
@@ -148,19 +152,17 @@ as invitations to improve:
 
 ## 6. Your next task
 
-The black-box loop is closed end-to-end (learn → synthesize → generate → judge).
-From `STATUS.md` → *Pick this up next*, the best pick is:
+The black-box loop is closed and deduplicated (learn → synthesize → generate → judge
+→ dedup). From `STATUS.md` → *Pick this up next*, the best pick is:
 
-1. **M5 (semantic dedup)** — self-contained, high-value. The enumerator emits 106
-   near-duplicate findings that collapse to 2 distinct bugs (order/padding variants).
-   Group candidates by a *causal signature* (which principal did the effect-bearing
-   action on the shared resource, in what causal order — ignoring padding and the
-   interleaving of independent steps) and report one representative per class.
-   Acceptance: `enum_demo` reports ~2 distinct findings, not 106; add a test asserting
-   it. Touch `enumerator.py` (+ maybe a small `dedup.py`).
-2. **M7 (evidence bundle)** — turn a `Verdict` + `Trace` into a shareable minimal
-   repro. Pairs naturally after M5.
-3. **M4 (real adapter)** — blocked on an authorized target from the human.
+1. **M7 (evidence bundle)** — turn each dedup `Cluster` into a shareable, bug-bounty-
+   ready report. `dedup.deduplicate(...)` already hands you the distinct bugs, each
+   with a minimal repro (`cluster.representative`), the clause, and the laundered
+   proof; `run_plan` on `build_plan(cluster.representative, …)` gives you the full
+   `Trace` + `Verdict` with canary evidence. Render one report per cluster
+   (markdown + JSON). Needs no new target. Add a test that a bundle is produced per
+   distinct bug.
+2. **M4 (real adapter)** — blocked on an authorized target from the human.
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).

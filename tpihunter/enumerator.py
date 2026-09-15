@@ -63,6 +63,7 @@ class Candidate:
     rationale: str
     length: int
     attacker_ops: int
+    merged: tuple = ()   # the (role, action) interleaving this plan was built from
 
 
 # ---- generation ------------------------------------------------------------
@@ -158,7 +159,8 @@ def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
     plan = Plan(name=_name(merged), targets_clause=clause,
                 steps=_insert_checkpoints(steps, victim), note=why)
     return Candidate(plan, mode, clause, why, len(merged),
-                     attacker_ops=sum(1 for r, _ in merged if r == "attacker"))
+                     attacker_ops=sum(1 for r, _ in merged if r == "attacker"),
+                     merged=merged)
 
 
 _MODE_ORDER = {"laundering": 0, "forgery": 1, "gap": 2}
@@ -196,3 +198,18 @@ def enumerate_plans(attacker: Principal, victim: Principal, email: str,
                 cands.append(_to_plan(merged, attacker, victim, email, specs))
     cands.sort(key=lambda c: (_MODE_ORDER.get(c.probed_mode, 9), c.length, c.attacker_ops, c.plan.name))
     return cands
+
+
+# ---- public helpers for post-processing (e.g. dedup / minimization) --------
+def build_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
+               victim: Principal, email: str,
+               specs: Optional[dict[str, ActionSpec]] = None) -> Plan:
+    """Rebuild an executable Plan from a (role, action) interleaving — used to
+    re-test reduced interleavings during minimization."""
+    return _to_plan(merged, attacker, victim, email, specs if specs is not None else ACTIONS).plan
+
+
+def is_wellformed(merged: tuple[tuple[str, str], ...],
+                  specs: Optional[dict[str, ActionSpec]] = None) -> bool:
+    """True if every action's ordering preconditions are met in `merged`."""
+    return _wellformed(merged, specs if specs is not None else ACTIONS)

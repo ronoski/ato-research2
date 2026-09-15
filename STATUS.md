@@ -9,7 +9,7 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 [`paper/provenance.html`](paper/provenance.html)).
 
 **Baseline (last verified green): 2026-09-15.** Test suite + four self-tests pass:
-`python3 -m unittest discover` (9 tests), and
+`python3 -m unittest discover` (12 tests), and
 `python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo}`.
 
 ---
@@ -29,6 +29,7 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 | execute | `TargetAdapter` (two-principal) + mock | ✅ done (M1); real target = M4 |
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
 | abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
+| refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 
 ---
 
@@ -100,12 +101,18 @@ flows, and a `channels.EmailChannel` backed by a mailbox you control.
   written authorization; see Scope in `README.md`.
 - Accept: `demo`/`enum_demo` verdicts reproduce against the real target.
 
-### ⬜ M5 — Semantic dedup of enumerator output  *(unclaimed)*
-The enumerator over-generates: 124 candidates collapse to 2 distinct bugs (order /
-padding variants). Collapse plans by causal signature so a hunter sees N *distinct*
-attacks, not N interleavings.
-- Files: `enumerator.py`
-- Accept: `enum_demo` reports ~2 distinct findings on the mock, not 106.
+### ✅ M5 — Semantic dedup of enumerator output  *(done 2026-09-15)*
+The enumerator over-generates (124 candidates, 106 findings) because it explores every
+interleaving and padding. Dedup collapses them to the distinct bugs.
+- Files: `dedup.py` (+ `Candidate.merged`, `build_plan`/`is_wellformed` in
+  `enumerator.py`)
+- How: **causal minimization** (delta-debug each fired probe against the oracle,
+  keeping the takeover *and its clause*) yields a minimal repro; findings are then
+  grouped by **causal signature** `(clause_id, set of effect-classes in the core)`.
+  Role/count/interleaving are abstracted away — the clause already encodes who/what.
+- Accept: `enum_demo` now reports **106 findings → 2 distinct bugs** (TPI-1 in 2
+  steps, TPI-4 in 3), each with a minimal repro and laundered proof; all close under
+  patch. Tests assert exactly 2 clusters and that every fired candidate is clustered.
 
 ### ⬜ M6 — Alloy offline attack-shape compiler  *(optional / later)*
 A relational Alloy model used **offline** to pre-compute violating interleavings
@@ -120,15 +127,13 @@ proof, the canary evidence) — a bug-bounty-ready artifact.
 
 ## Pick this up next
 
-The black-box loop is now closed end-to-end (learn → synthesize → generate → judge).
-Best next tasks:
-1. **M5 (semantic dedup)** — highest-value, self-contained. The enumerator emits 106
-   near-duplicate findings that collapse to 2 distinct bugs (order/padding variants).
-   Collapse candidates by causal signature so a hunter sees *distinct* attacks. Add a
-   test asserting ~2 distinct findings on the mock. Low risk, high readability.
-2. **M7 (findings/evidence bundle)** — turn a `Verdict` + `Trace` into a shareable
-   minimal repro. Pairs well with M5 (dedup first, then report the distinct ones).
-3. **M4 (real `TargetAdapter`)** — needs an authorized target from the human; blocked
+The loop is closed end-to-end and deduplicated (learn → synthesize → generate →
+judge → dedup). Best next tasks:
+1. **M7 (findings/evidence bundle)** — turn each dedup `Cluster` (`Verdict` + minimal
+   repro `Trace` + laundered proof + canary evidence) into a shareable, bug-bounty-
+   ready report (markdown/JSON). Dedup already hands you the distinct bugs and their
+   minimal repros — this is the natural next step and needs no new target.
+2. **M4 (real `TargetAdapter`)** — needs an authorized target from the human; blocked
    until then. When unblocked, also point the learner (`sul.py`) at the real target.
 
 Also open (small): give the learner a **W-method conformance oracle** so the learned
@@ -148,9 +153,14 @@ machine is sound within a bound, not just random-walk-tested.
 
 ## Known limitations
 
-- Enumerator over-generation (→ M5).
+- Dedup groups by `(clause, effect-set)`, so two genuinely different bugs that share a
+  clause *and* the same effect-classes would merge into one cluster. Acceptable for
+  now (the clause already carries the who/what distinction); revisit if a real target
+  produces false merges — the fix is a finer signature, not more clusters by default.
 - Oracle diagnosis is heuristic over the black-box trace; a white-box hook could
   corroborate.
+- Learner uses a random-walk equivalence oracle (sound only up to sampling); a
+  W-method oracle would make the learned machine sound within a bound.
 - Temporal/TOCTOU races and freshness windows are modelled as ordering only, not yet
   as timed automata.
 
@@ -158,6 +168,15 @@ machine is sound within a bound, not just random-walk-tested.
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3.* **M5 complete: semantic dedup.** Added `dedup.py`:
+  causal minimization (delta-debug each fired probe against the oracle, preserving the
+  takeover + clause) → minimal repro, then group by causal signature
+  `(clause, effect-set)`. First cut grouped by `(role, effect)` and split TPI-4 into 3
+  exploitation-path variants; coarsened to effect-set (the clause already encodes
+  who/what) → **106 findings collapse to 2 distinct bugs**. Exposed `Candidate.merged`
+  + `build_plan`/`is_wellformed` in `enumerator.py`; rewrote `enum_demo` around dedup;
+  added 3 dedup tests (suite now 12). All demos + tests green. **Next:** M7 (turn a
+  dedup `Cluster` into a shareable evidence bundle) — see *Pick this up next*.
 - **2026-09-15** — *End of shift (session 2).* **M3 complete.** Refactored `sul.py`
   to learn over the adapter's own action names and to expose the trust-raise
   (`sso_login`→`OK_VERIFIED`); added `synthesis.py` (learned machine → enumerator
