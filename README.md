@@ -28,9 +28,10 @@ Stdlib-only; no `pip install`.
 
 ## Working on this project?
 
-Read **[`STATUS.md`](STATUS.md) first** — it is the live coordination board that
-tracks which stage the project is at, what is DONE, and what to pick up next.
-Multiple agents/sessions collaborate here.
+New session taking over? Read **[`HANDOFF.md`](HANDOFF.md) first** — it onboards you
+to the goal, the theory, and how to review and continue the work. Then
+**[`STATUS.md`](STATUS.md)** is the live board: current stage, what's done, what's
+next. Sessions work as a **relay — one at a time, never concurrently.**
 
 ## Scope
 

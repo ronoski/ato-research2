@@ -32,18 +32,21 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 
 ---
 
-## How to collaborate (protocol)
+## How to collaborate (relay model)
 
-1. **Sync + verify baseline.** `git pull`, then run both self-tests. Don't build on red.
-2. **Claim a task.** Edit its milestone below to `🚧 IN PROGRESS — <your handle>, <date>`,
-   commit *just that STATUS.md change*, and push, so others see the claim. Prefer
-   coarse tasks so two sessions don't split one file.
+Sessions work **one at a time, never concurrently** — a relay. New here? Read
+[`HANDOFF.md`](HANDOFF.md) first: it onboards you, explains the goal, and points to
+where the last shift ended (the top Changelog entry below).
+
+1. **Start of shift.** `git pull`, then run the three self-tests. Don't build on red.
+2. **Claim your task** by marking its milestone `🚧 IN PROGRESS — <handle>, <date>`.
 3. **Definition of done for any change:**
-   - both self-tests still pass;
+   - all three self-tests still pass (`demo`, `enum_demo`, `learn_demo`);
    - the oracle stays **discriminating** — if you add a vulnerability to the mock,
      add its patch too, so `enum_demo` shows TAKEOVER on vuln *and* SAFE on patched;
    - you updated this board (status + Changelog) in the same commit.
-4. **Small commits, push often.** Leave the tree green.
+4. **End of shift.** Commit, push, leave the tree green. The Changelog top entry is
+   your handoff to the next session.
 
 The load-bearing invariant: **a verdict must never fire on the patched target.**
 `enum_demo` self-checks this and prints a WARNING if it breaks — treat that WARNING
@@ -144,6 +147,11 @@ Two ready tasks:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *End of shift (session 1).* Added [`HANDOFF.md`](HANDOFF.md) as the
+  onboarding + relay entry point and switched the collaboration model to a relay
+  (one session at a time). **Next session:** read HANDOFF.md, then pick up the M3
+  wiring (learned machine → enumerator) or M5 (semantic dedup). Tree is green; all
+  three self-tests pass. Nothing half-done.
 - **2026-09-15** — M3 core: black-box automata learning landed (`sul.py`,
   `learner.py`, `learn_demo.py`). L* recovers the mock's 5-state auth FSM in 542
   membership queries. Remaining M3 sub-task: feed the learned machine into the
