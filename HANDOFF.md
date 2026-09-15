@@ -36,12 +36,14 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 
 ## 2. Get oriented in five minutes
 
-Run the three self-tests — the fastest way to see what exists and that it works:
+Run the test suite and the four self-tests — the fastest way to see what exists:
 
 ```bash
+python3 -m unittest discover     # 9 tests: the invariants that must not regress
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes, rediscovers TPI-1 and finds TPI-4
 python3 -m tpihunter.learn_demo  # automata learning: L* recovers the mock's auth state machine
+python3 -m tpihunter.synth_demo  # the closed loop: learn → synthesize action model → enumerate
 ```
 
 Then read, in this order:
@@ -52,7 +54,7 @@ Then read, in this order:
 4. **the code**, in dependency order:
    `types.py` → `clauses.py` → `channels.py` → `adapter.py` → `oracle.py` →
    `mock_target.py` → `harness.py` → `probes.py` → `enumerator.py` →
-   `sul.py` → `learner.py`
+   `sul.py` → `learner.py` → `synthesis.py`
 
 ---
 
@@ -75,9 +77,10 @@ The loop the project implements:
 | `mock_target.py` | a deliberately vulnerable in-memory target + adapter, with a `patched` toggle |
 | `harness.py` | `Plan`/`Step` + `run_plan`: probes as data, run with oracle checkpoints |
 | `probes.py` | hand-written TPI probe plans |
-| `enumerator.py` | **generates** probes — composition-relevant interleavings |
+| `enumerator.py` | **generates** probes — composition-relevant interleavings; takes a `specs` model |
 | `sul.py` | System-Under-Learning interface + single-account view of the mock |
 | `learner.py` | Angluin's L* Mealy learner (black-box automata learning) |
+| `synthesis.py` | learned machine → the enumerator's `ActionSpec` model (closes the loop) |
 
 **Key design decisions (don't undo without cause — rationale in `STATUS.md`):**
 - **Black-box loop, not Alloy, for hunting.** A hunter's scarce resource is a
@@ -118,10 +121,15 @@ as invitations to improve:
   (below).
 - **L\* uses a random-walk equivalence oracle** — realistic for a black box, but the
   learned machine can be incomplete for larger alphabets. A W-method / Wp-method
-  conformance oracle would make it sound within a bound.
-- **No `tests/` yet.** The three demos double as tests. Consider adding `pytest`
-  assertions (e.g. "vuln → TAKEOVER, patched → SAFE"; "learner recovers ≥5 states")
-  so regressions fail mechanically instead of by eye.
+  conformance oracle would make it sound within a bound. *(Still open.)*
+- **`tests/` now exists** (`tests/test_tpihunter.py`, stdlib `unittest`, 9 tests) and
+  codifies the load-bearing invariant + the learn→synthesize pipeline. *Extend it
+  when you add behaviour* — e.g. M5 should assert "~2 distinct findings on the mock".
+- **`synthesis.py` effect classifier is signature-based** (`OK_VERIFIED`→RAISE,
+  `SENT`→REQUEST, session-after-token→CRED). It matches the mock exactly, but a real
+  target's output vocabulary will differ — the mapping in `SUCCESS_OUTPUTS` /
+  `classify_effect` is where you adapt it, and `needs_control` is declared, not
+  learned (single-account traces always control the identifier).
 
 ---
 
@@ -131,26 +139,28 @@ as invitations to improve:
   target. `enum_demo` self-checks this and prints a `WARNING` if broken — treat that
   WARNING as a build failure.
 - **Keep it runnable and self-validating.** Every capability ships with a demo that
-  proves it on the mock.
+  proves it on the mock, and a test that asserts it.
 - **Stdlib-only** unless there is a strong reason (a real HTTP adapter will want
   `httpx` — that's fine; isolate it so the core stays dependency-free).
-- **All three demos stay green.** Don't hand back on red.
+- **`unittest discover` and all four demos stay green.** Don't hand back on red.
 
 ---
 
 ## 6. Your next task
 
-From `STATUS.md` → *Pick this up next*:
+The black-box loop is closed end-to-end (learn → synthesize → generate → judge).
+From `STATUS.md` → *Pick this up next*, the best pick is:
 
-1. **Finish M3** — wire the learned Mealy machine (`learner.py`) into the enumerator.
-   Add a classifier that labels each learned transition SEED / RAISE / CRED from its
-   output signature (e.g. an input that first yields `OK_SESSION` from a fresh state
-   is a SEED; one that flips a "verified/trust" observable is a RAISE), then let
-   `enumerate_plans` take an alphabet derived from a learned machine instead of the
-   static `ACTIONS` table. Acceptance: the enumerator reproduces the M2 findings from
-   *learned* behaviour.
-2. **Or M5** (semantic dedup) — independent, parallel-safe, good if you'd rather not
-   touch the learner yet.
+1. **M5 (semantic dedup)** — self-contained, high-value. The enumerator emits 106
+   near-duplicate findings that collapse to 2 distinct bugs (order/padding variants).
+   Group candidates by a *causal signature* (which principal did the effect-bearing
+   action on the shared resource, in what causal order — ignoring padding and the
+   interleaving of independent steps) and report one representative per class.
+   Acceptance: `enum_demo` reports ~2 distinct findings, not 106; add a test asserting
+   it. Touch `enumerator.py` (+ maybe a small `dedup.py`).
+2. **M7 (evidence bundle)** — turn a `Verdict` + `Trace` into a shareable minimal
+   repro. Pairs naturally after M5.
+3. **M4 (real adapter)** — blocked on an authorized target from the human.
 
 Start wherever you have the most conviction. Update `STATUS.md` to claim it (mark the
 milestone `🚧 IN PROGRESS — <your handle>, <date>`).
@@ -159,7 +169,7 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 ## 7. Hand back cleanly (end of your shift)
 
-1. Confirm all three demos pass and modules compile
+1. Confirm `python3 -m unittest discover` and all four demos pass, and modules compile
    (`python3 -m py_compile tpihunter/*.py`).
 2. Update `STATUS.md`: milestone statuses + a new **Changelog** entry (newest first)
    saying what you did, what you found, and what's next. That entry *is* your handoff
@@ -174,5 +184,5 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 
 - Repo: `/home/ron/ato-research2` → https://github.com/ronoski/ato-research2 (private, `main`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
-- Python 3, stdlib only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`.
-- Two commits so far: initial (M0–M2), then M3 core.
+- Python 3, stdlib only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete (synthesis + tests). Each shift is one or more commits ending with a `Co-Authored-By` line.

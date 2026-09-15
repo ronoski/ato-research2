@@ -72,9 +72,13 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `enumerator.py` | **generates** probe plans — composition-relevant interleavings |
 | `sul.py` | System-Under-Learning interface + a single-account view of the mock |
 | `learner.py` | L* Mealy-machine learner (black-box automata learning) |
+| `synthesis.py` | turns a learned machine into the enumerator's action model |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
 | `learn_demo.py` | self-test of the learner (recovers the mock's auth FSM) |
+| `synth_demo.py` | self-test of the closed loop (learn → synthesize → enumerate) |
+
+Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
 ## Hunting a real target
 
@@ -123,17 +127,35 @@ queries (Angluin's L* + a random-walk equivalence oracle):
 python3 -m tpihunter.learn_demo
 ```
 
-Against the mock it recovers a 5-state auth FSM — session (logged-in / -out) and
-reset-token-outstanding dimensions and all — from ~540 membership queries. Wrap a
-real target in the `SUL` interface (`reset()`, `step`) to learn *its* machine.
+Against the mock it recovers a 9-state auth FSM — session, *verified* (the
+`sso_login`→`OK_VERIFIED` trust-raise), reset-token, and logged-out dimensions —
+from ~1.5k membership queries. Wrap a real target in the `SUL` interface
+(`reset()`, `step`) to learn *its* machine.
+
+## Closing the loop: learn → synthesize → generate
+
+`synthesis.py` turns a learned machine into the enumerator's action model, so
+probe generation runs on *observed* behaviour rather than the hand-coded `ACTIONS`
+table:
+
+```
+python3 -m tpihunter.synth_demo
+```
+
+It derives each action's ordering (`requires`, from the FSM structure) and effect
+(SEED / RAISE / CRED / REQUEST, from the output signature — e.g. a verified session
+is a RAISE, a session gated behind a token is a CRED). Only `needs_control` is
+declared per channel, since single-account traces always control the identifier.
+Against the mock the synthesized effects **match the hand-coded model exactly**, and
+generation reproduces the same {TPI-1, TPI-4} findings — the static table is no
+longer trusted. Pass the result via `enumerate_plans(..., specs=synthesized)`.
 
 ## Roadmap
 
-- **Wire learning into generation** (finishing M3): map learned transitions to the
-  enumerator's effect classes so generation runs on learned behaviour, not the
-  static `ACTIONS` table.
-- **Semantic dedup**: the enumerator currently over-generates order/padding
-  variants (124 candidates, 2 distinct bugs); collapse plans by causal signature.
+- **Semantic dedup**: the enumerator over-generates order/padding variants
+  (124 candidates, 2 distinct bugs); collapse plans by causal signature.
+- **W-method conformance oracle**: replace the learner's random-walk equivalence
+  check so the learned machine is sound within a bound.
 - **Alloy** (optional, offline): a relational model as an *attack-shape compiler*
   that pre-computes violating interleavings to seed the enumerator — a design-time
   force-multiplier, never in the live loop.

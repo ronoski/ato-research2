@@ -4,14 +4,14 @@ from black-box queries and print it.
     python3 -m tpihunter.learn_demo
 
 The recovered Mealy machine is the *implemented* protocol state machine — e.g. it
-shows that RESET_USE only yields a session after a RESET_REQ, and that LOGIN is
-denied until an account exists. This is the de Ruiter & Poll move: learn what the
-server really does, then diff against intent or feed the alphabet to the enumerator.
+shows that reset_consume only yields a session after a reset_request, and that
+sso_login yields a *verified* session (OK_VERIFIED) that plain register/login do
+not. This is the de Ruiter & Poll move: learn what the server really does, then
+diff against intent or feed the alphabet to synthesis + the enumerator.
 """
 from __future__ import annotations
 
 from .learner import LStar, Mealy
-from .sul import MockSUL
 
 
 def _fmt_word(w) -> str:
@@ -25,12 +25,13 @@ def print_machine(m: Mealy) -> None:
         for a in m.alphabet:
             nxt, out = m.trans[(st, a)]
             arrow = "self" if nxt == st else nxt
-            print(f"      {a:10} / {out:12} -> {arrow}")
+            print(f"      {a:14} / {out:12} -> {arrow}")
 
 
 def main() -> None:
+    from .sul import MockSUL
     sul = MockSUL(patched=False)
-    learner = LStar(sul, seed=1)
+    learner = LStar(sul, seed=1, eq_tests=1500)
     machine = learner.learn()
 
     print("\nTPI-HUNTER  -  automata learning (black-box L*)")
@@ -39,17 +40,18 @@ def main() -> None:
     print(f"states:   {len(machine.states)}  (initial: {machine.initial})\n")
     print_machine(machine)
 
-    # A couple of read-offs a hunter cares about.
+    # A few read-offs a hunter cares about.
     print("\n read-offs:")
-    reg_out = machine.run(("REGISTER",))
-    pre_reset = machine.run(("RESET_USE",))
-    post_reset = machine.run(("REGISTER", "RESET_REQ", "RESET_USE"))
-    print(f"   REGISTER from start                 -> {reg_out}")
-    print(f"   RESET_USE with no prior RESET_REQ    -> {pre_reset}   (no outstanding token)")
-    print(f"   REGISTER>RESET_REQ>RESET_USE         -> {post_reset}   (token consumed -> session)")
-    print("\n Next (M3 cont.): map these learned transitions to the enumerator's")
-    print(" effect classes so generation runs on learned behaviour, not the static")
-    print(" ACTIONS table.\n")
+    reg = machine.run(("register",))
+    sso = machine.run(("sso_login",))
+    pre_reset = machine.run(("reset_consume",))
+    post_reset = machine.run(("register", "reset_request", "reset_consume"))
+    print(f"   register from start                      -> {reg}")
+    print(f"   sso_login from start                     -> {sso}   (verified session — a trust-raise)")
+    print(f"   reset_consume with no prior reset_request -> {pre_reset}   (no outstanding token)")
+    print(f"   register>reset_request>reset_consume      -> {post_reset}   (token consumed -> session)")
+    print("\n Next: synthesis.specs_from_machine turns this into the enumerator's")
+    print(" action model — see `python3 -m tpihunter.synth_demo`.\n")
 
 
 if __name__ == "__main__":

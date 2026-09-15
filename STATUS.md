@@ -8,9 +8,9 @@
 Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 [`paper/provenance.html`](paper/provenance.html)).
 
-**Baseline (last verified green): 2026-09-15.** Three self-tests pass:
-`python3 -m tpihunter.demo`, `python3 -m tpihunter.enum_demo`,
-`python3 -m tpihunter.learn_demo`.
+**Baseline (last verified green): 2026-09-15.** Test suite + four self-tests pass:
+`python3 -m unittest discover` (9 tests), and
+`python3 -m tpihunter.{demo,enum_demo,learn_demo,synth_demo}`.
 
 ---
 
@@ -28,7 +28,7 @@ Trust-Provenance Integrity theory (see [`README.md`](README.md) and
 | judge | `AtoOracle` — the verdict engine | ✅ done (M1) |
 | execute | `TargetAdapter` (two-principal) + mock | ✅ done (M1); real target = M4 |
 | generate | `enumerator` — composition-relevant interleavings | ✅ done (M2) |
-| abstract (auto) | learn alphabet + FSM from a target (L*) | 🚧 in progress (M3) |
+| abstract (auto) | learn FSM (L*) → synthesize action model → generate | ✅ done (M3) |
 
 ---
 
@@ -41,7 +41,8 @@ where the last shift ended (the top Changelog entry below).
 1. **Start of shift.** `git pull`, then run the three self-tests. Don't build on red.
 2. **Claim your task** by marking its milestone `🚧 IN PROGRESS — <handle>, <date>`.
 3. **Definition of done for any change:**
-   - all three self-tests still pass (`demo`, `enum_demo`, `learn_demo`);
+   - `python3 -m unittest discover` is green (add a test for what you build);
+   - all four self-tests still pass (`demo`, `enum_demo`, `learn_demo`, `synth_demo`);
    - the oracle stays **discriminating** — if you add a vulnerability to the mock,
      add its patch too, so `enum_demo` shows TAKEOVER on vuln *and* SAFE on patched;
    - you updated this board (status + Changelog) in the same commit.
@@ -74,19 +75,23 @@ Generates two-principal interleavings, pruned by the composition-relevance filte
 - Accept: `enum_demo` finds TPI-1 **and** TPI-4 with no hand-written probe; all
   findings close under patch.
 
-### 🚧 M3 — Automata learning  *(IN PROGRESS — core landed 2026-09-15)*
-Learn the alphabet and the per-subsystem Mealy machine from a **black-box** target
-(active learning, L*/LearnLib-style) so the enumerator runs on the behaviour the
-server *actually* implements, not the hand-coded `ACTIONS` table in `enumerator.py`.
-- [x] `SUL` interface (`reset()`, `step(input) -> output`) — `sul.py`
+### ✅ M3 — Automata learning → synthesis → generation  *(done 2026-09-15)*
+Learn the Mealy machine a **black-box** target really implements, then generate from
+*that* instead of the hand-coded `ACTIONS` table.
+- [x] `SUL` interface (`reset()`, `step`) over the adapter's action names — `sul.py`
 - [x] L* Mealy learner + random-walk equivalence oracle — `learner.py`
-- [x] `learn_demo` recovers the mock's 5-state login/reset FSM (RESET_USE only
-      yields a session after RESET_REQ; LOGIN denied until an account exists)
-- [ ] **remaining:** feed the learned alphabet + an effect classification into the
-      enumerator, replacing the static `ACTIONS` specs (needs a heuristic to label
-      learned transitions as SEED / RAISE / CRED from their output signature).
-- Accept (remaining): `enumerator` consumes a learned machine and reproduces the
-  M2 findings without the hand-coded action table.
+- [x] `learn_demo` recovers the mock's **9-state** auth FSM (captures session,
+      *verified* via `sso_login`→`OK_VERIFIED`, reset-token, and logged-out dims)
+- [x] `synthesis.py` — derives the enumerator's `ActionSpec` model from a learned
+      machine: `requires` from FSM structure, effect (SEED/RAISE/CRED/REQUEST) from
+      output signature; `needs_control` declared per channel (unobservable from
+      single-account traces)
+- [x] `enumerate_plans(..., specs=…)` now takes a synthesized model
+- [x] `synth_demo` — learn → synthesize → enumerate; synthesized effects match the
+      hand-coded `ACTIONS`, and generation reproduces {TPI-1, TPI-4}, all closing
+      under patch. **M3 acceptance: PASS.**
+- Follow-ups worth doing: W-method/Wp conformance oracle for soundness within a
+  bound (currently random-walk); learn against a real target once M4 lands.
 
 ### ⬜ M4 — Real `TargetAdapter`  *(unclaimed)*
 Implement `TargetAdapter` against a live app: one `httpx` client per principal, real
@@ -115,13 +120,19 @@ proof, the canary evidence) — a bug-bounty-ready artifact.
 
 ## Pick this up next
 
-Two ready tasks:
-1. **Finish M3** — wire the learned Mealy machine into the enumerator. Add a
-   classifier that labels each learned transition SEED / RAISE / CRED from its
-   output signature, then have `enumerate_plans` take an alphabet derived from a
-   learned machine. This closes the loop: generation from *learned* behaviour.
-2. **M5 (semantic dedup)** — independent of M3; collapses the enumerator's 106
-   near-duplicate findings to ~2 distinct ones. Good parallel task.
+The black-box loop is now closed end-to-end (learn → synthesize → generate → judge).
+Best next tasks:
+1. **M5 (semantic dedup)** — highest-value, self-contained. The enumerator emits 106
+   near-duplicate findings that collapse to 2 distinct bugs (order/padding variants).
+   Collapse candidates by causal signature so a hunter sees *distinct* attacks. Add a
+   test asserting ~2 distinct findings on the mock. Low risk, high readability.
+2. **M7 (findings/evidence bundle)** — turn a `Verdict` + `Trace` into a shareable
+   minimal repro. Pairs well with M5 (dedup first, then report the distinct ones).
+3. **M4 (real `TargetAdapter`)** — needs an authorized target from the human; blocked
+   until then. When unblocked, also point the learner (`sul.py`) at the real target.
+
+Also open (small): give the learner a **W-method conformance oracle** so the learned
+machine is sound within a bound, not just random-walk-tested.
 
 ---
 
@@ -147,6 +158,17 @@ Two ready tasks:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *End of shift (session 2).* **M3 complete.** Refactored `sul.py`
+  to learn over the adapter's own action names and to expose the trust-raise
+  (`sso_login`→`OK_VERIFIED`); added `synthesis.py` (learned machine → enumerator
+  `ActionSpec` model) and threaded a `specs` param through `enumerator.py`; added
+  `synth_demo.py`. The learner now recovers a 9-state machine and the synthesized
+  effects match the hand-coded `ACTIONS` exactly, reproducing {TPI-1, TPI-4} with no
+  patched-target firing. Also added a **stdlib `tests/` suite** (9 tests,
+  `python3 -m unittest discover`) codifying the load-bearing invariant and the
+  learn→synthesize pipeline — addresses the "no tests" gap the last shift flagged.
+  **Next session:** M5 (semantic dedup) is the best pick; see *Pick this up next*.
+  Everything green; nothing half-done.
 - **2026-09-15** — *End of shift (session 1).* Added [`HANDOFF.md`](HANDOFF.md) as the
   onboarding + relay entry point and switched the collaboration model to a relay
   (one session at a time). **Next session:** read HANDOFF.md, then pick up the M3

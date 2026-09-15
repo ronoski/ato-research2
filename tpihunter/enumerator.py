@@ -90,36 +90,36 @@ def _merge(a: list[tuple[str, str]], b: list[tuple[str, str]]) -> list[tuple[tup
     return out
 
 
-def _wellformed(merged: tuple[tuple[str, str], ...]) -> bool:
+def _wellformed(merged: tuple[tuple[str, str], ...], specs: dict[str, ActionSpec]) -> bool:
     """Preconditions checked against the merged prefix (a shared store/inbox: a
     reset_request by anyone enables a later reset_consume)."""
     seen: set[str] = set()
     for _role, action in merged:
-        for req in ACTIONS[action].requires:
+        for req in specs[action].requires:
             if req not in seen:
                 return False
         seen.add(action)
     return True
 
 
-def _relevant(merged: tuple[tuple[str, str], ...]) -> bool:
+def _relevant(merged: tuple[tuple[str, str], ...], specs: dict[str, ActionSpec]) -> bool:
     """The composition-relevance filter: both principals present, and a trust-raise
     or credential-change occurs on the shared resource."""
     roles = {r for r, _ in merged}
     if len(roles) < 2:
         return False
-    effects = {ACTIONS[a].effect for _, a in merged}
+    effects = {specs[a].effect for _, a in merged}
     return Effect.RAISE in effects or Effect.CRED in effects
 
 
-def _classify(merged: tuple[tuple[str, str], ...]) -> tuple[str, str, str]:
-    effects = [ACTIONS[a].effect for _, a in merged]
+def _classify(merged: tuple[tuple[str, str], ...], specs: dict[str, ActionSpec]) -> tuple[str, str, str]:
+    effects = [specs[a].effect for _, a in merged]
     if Effect.RAISE in effects:
         return ("laundering", "TPI-1",
                 "attacker seeds the row; victim later raises its trust -> the attacker "
                 "binding must be revoked on rebind")
     if Effect.CRED in effects:
-        attacker_cred = any(r == "attacker" and ACTIONS[a].effect is Effect.CRED for r, a in merged)
+        attacker_cred = any(r == "attacker" and specs[a].effect is Effect.CRED for r, a in merged)
         if attacker_cred:
             return ("forgery", "TPI-2",
                     "attacker consumes a proof pinned to a now-stale binding")
@@ -144,7 +144,7 @@ def _insert_checkpoints(steps: list[Step], victim: Principal) -> list[Step]:
 
 
 def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
-             victim: Principal, email: str) -> Candidate:
+             victim: Principal, email: str, specs: dict[str, ActionSpec]) -> Candidate:
     steps: list[Step] = []
     for role, action in merged:
         p = attacker if role == "attacker" else victim
@@ -154,7 +154,7 @@ def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
         if action == "reset_consume":
             params["new_password"] = "AtkReset!9" if role == "attacker" else "VicReset!9"
         steps.append(Step(p, action, params))
-    mode, clause, why = _classify(merged)
+    mode, clause, why = _classify(merged, specs)
     plan = Plan(name=_name(merged), targets_clause=clause,
                 steps=_insert_checkpoints(steps, victim), note=why)
     return Candidate(plan, mode, clause, why, len(merged),
@@ -165,12 +165,23 @@ _MODE_ORDER = {"laundering": 0, "forgery": 1, "gap": 2}
 
 
 def enumerate_plans(attacker: Principal, victim: Principal, email: str,
-                    actions: list[str] = DEFAULT_ACTIONS,
+                    actions: Optional[list[str]] = None,
+                    specs: Optional[dict[str, ActionSpec]] = None,
                     attacker_controls_target: bool = False,
                     victim_controls_target: bool = True,
                     max_attacker: int = 2, max_victim: int = 2) -> list[Candidate]:
-    a_pool = [a for a in actions if not (ACTIONS[a].needs_control and not attacker_controls_target)]
-    v_pool = [a for a in actions if not (ACTIONS[a].needs_control and not victim_controls_target)]
+    """Generate composition-relevant two-principal probes.
+
+    `specs` is the action model driving generation. It defaults to the hand-coded
+    `ACTIONS`, but pass a spec dict synthesized from a *learned* machine
+    (`synthesis.specs_from_machine`) to run generation on observed behaviour. When
+    `actions` is omitted it defaults to the spec's own action set.
+    """
+    specs = specs if specs is not None else ACTIONS
+    actions = actions if actions is not None else list(specs.keys())
+
+    a_pool = [a for a in actions if not (specs[a].needs_control and not attacker_controls_target)]
+    v_pool = [a for a in actions if not (specs[a].needs_control and not victim_controls_target)]
 
     seen: set[tuple] = set()
     cands: list[Candidate] = []
@@ -179,9 +190,9 @@ def enumerate_plans(attacker: Principal, victim: Principal, email: str,
         for v_seq in _perms(v_pool, max_victim):
             v_tagged = [("victim", x) for x in v_seq]
             for merged in _merge(a_tagged, v_tagged):
-                if merged in seen or not _wellformed(merged) or not _relevant(merged):
+                if merged in seen or not _wellformed(merged, specs) or not _relevant(merged, specs):
                     continue
                 seen.add(merged)
-                cands.append(_to_plan(merged, attacker, victim, email))
+                cands.append(_to_plan(merged, attacker, victim, email, specs))
     cands.sort(key=lambda c: (_MODE_ORDER.get(c.probed_mode, 9), c.length, c.attacker_ops, c.plan.name))
     return cands
