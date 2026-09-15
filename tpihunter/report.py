@@ -56,6 +56,7 @@ class Report:
     narrative: str
     clause_statement: Optional[str]
     variants_collapsed: int
+    mode: str = "confluence"     # "confluence" (two-principal) | "revocation" (own-account)
 
     # -- rendering ------------------------------------------------------------
     def title(self) -> str:
@@ -107,8 +108,12 @@ class Report:
         L.append(self.narrative)
         L.append("")
         L.append("## Steps to reproduce")
-        L.append("Two principals — **attacker** (does not control the account's "
-                 "inbox/IdP) and **victim** (does) — acting over the one shared account:")
+        if self.mode == "revocation":
+            L.append("A single account you own. Mint a session, capture its credential, "
+                     "perform the mutation, then re-present the captured credential:")
+        else:
+            L.append("Two principals — **attacker** (does not control the account's "
+                     "inbox/IdP) and **victim** (does) — acting over the one shared account:")
         L.append("")
         for s in self.steps:
             proof = f" _(proof: {s.proof})_" if s.proof else ""
@@ -217,3 +222,38 @@ def bundle_to_markdown(reports: list) -> str:
 def bundle_to_json(reports: list) -> str:
     return json.dumps({"distinct_bugs": len(reports),
                        "bugs": [r.to_dict() for r in reports]}, indent=2)
+
+
+# --------------------------------------------------------------------------- #
+#  Revocation-matrix findings render to the same report shape.
+# --------------------------------------------------------------------------- #
+def revocation_report(cell, *, email: str) -> Report:
+    """Assemble a Report from a matrix `CellVerdict` whose survival is SURVIVED."""
+    clause = CLAUSES.get(cell.clause_id) if cell.clause_id else None
+    steps = [
+        ReproStep(1, "owner", f"mint:{cell.mint_id}", True,
+                  "establish a session, then capture its credential", None, email),
+        ReproStep(2, "owner", f"mutate:{cell.mutation_id}", True,
+                  "perform the credential-mutating transition on the same account", None, email),
+        ReproStep(3, "owner", "re-present captured credential", True,
+                  "the pre-mutation credential still authenticates — it should have been revoked",
+                  None, email),
+    ]
+    return Report(
+        clause_id=cell.clause_id,
+        clause_title=(clause.title if clause else None),
+        failure_mode="laundering",
+        severity="takeover",
+        confidence=cell.confidence,
+        email=email,
+        minimal_repro=[("owner", f"mint:{cell.mint_id}"), ("owner", f"mutate:{cell.mutation_id}")],
+        steps=steps,
+        evidence=[{"kind": "binding_survival", "detail": e, "strength": 3} for e in cell.evidence],
+        laundered_proof=f"session minted by '{cell.mint_id}', surviving '{cell.mutation_id}'",
+        narrative=("A session credential minted before a credential-mutating transition still "
+                   f"authenticates after it: {cell.note}. A stolen session therefore outlives "
+                   "the account owner's own remediation."),
+        clause_statement=(clause.statement if clause else None),
+        variants_collapsed=1,
+        mode="revocation",
+    )

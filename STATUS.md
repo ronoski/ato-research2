@@ -15,10 +15,10 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-15.** Test suite + eight self-tests pass:
-`python3 -m unittest discover` (31 tests), and `python3 -m tpihunter.{demo,enum_demo,
-learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo}` (the live
-one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
+**Baseline (last verified green): 2026-09-15.** Test suite + nine self-tests pass:
+`python3 -m unittest discover` (36 tests), and `python3 -m tpihunter.{demo,enum_demo,
+learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo}`
+(the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---
@@ -41,6 +41,7 @@ one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
+| **revocation** | `matrix` — mutation × predating-binding lifecycle mode (own-account) | ✅ done (M12) |
 
 ---
 
@@ -170,6 +171,25 @@ Recast probe generation as a pluggable **strategy** so an agent can drive the lo
 - Accept: live wiring test (fake client → `complete_fn` → `LLMStrategist` →
   `AgentHunter`) finds both bugs in 2 probes; defaults assert Opus + adaptive thinking.
 
+### ✅ M12 — Revocation matrix: a second hunting mode  *(done 2026-09-15, session 3)*
+The single-principal, own-account, over-time expression of Composition-Blindness — the
+computable form of the matrix that proved valuable on the real Grab engagement.
+- Files: `matrix.py` (`RevocationMatrix`, `MintSpec`/`MutationSpec`, `run_cell`,
+  `Survival`, `default_mints`/`default_mutations`), `matrix_demo.py`;
+  `HuntSession.revocation_matrix()` + a `revocation_matrix` MCP tool; `report.revocation_report`
+  renders a SURVIVED cell as a submittable bug; `harness.execute_action` extracted for reuse;
+  the mock got binding capture/re-present (`capture_binding`/`present_binding`) and a
+  per-mutation `revokes` model (a real `logout` that may or may not clear the token).
+- The question per cell: *for a binding minted before a credential-mutating transition,
+  does the transition revoke it?* A SURVIVED cell is TPI-4 laundering (a stolen session that
+  outlives the owner's logout/reset). Single-principal, own-account, reversible — the
+  **ROE-safe mode** a real engagement needs (no reading anyone else's data), unlike the
+  two-principal confluence oracle.
+- Why it matters: on the *patched* mock the fix propagated to the reset flow but **not** the
+  parallel logout flow — the matrix shows one red cell in a green column, Composition-
+  Blindness made visible. Each cell carries its own positive + negative control, so SURVIVED
+  is never a broken-check artifact. +5 tests (suite 36), 9 demos.
+
 ### ✅ M11 — New-action synthesis (agent extends its own alphabet)  *(done 2026-09-15)*
 The agent proposes *new* actions for flows the fixed alphabet lacks — the biggest lever
 for finding bugs an enumerator never could.
@@ -217,13 +237,19 @@ deferred**, not the next task. In priority order now:
    one). If the owner promotes a TPI-L composition cell (e.g. TPI-L1 logout-propagation),
    help turn it into a house-format `hunts/G<n>/HYPOTHESIS.md` — through *their*
    `tools/hunt.py preflight` gate; **no firing without the owner's OK; filing is theirs.**
-2. **Robustness (do-able now against the mock, de-risks any future live adapter):**
+2. **Extend the revocation matrix (M12) toward real engagements.** The mock proves the
+   machinery; the value is more mint/mutation kinds — factor-enroll and popkey-rebind as
+   mints, and cross-*plane* re-presentation (does a binding survive a mutation on a
+   *different* API plane?), which is the exact open cell in the Grab lens (T-ATO-05).
+   Also: a `revokes`-varied mock target so the matrix has richer non-uniformity to find.
+3. **Robustness (do-able now against the mock, de-risks any future live adapter):**
    oracle retry on a suspect verdict, and a param model richer than email-only for
    synthesized actions (magic-link codes, invites, aliasing).
-3. **M4 — real `TargetAdapter`** — only if a promoted TPI-L hypothesis genuinely needs a
-   bespoke two-principal runner the *grab* toolchain can't express; ROE hard-wired
-   (X-Bug-Bounty header, own-accounts-only, in-scope allowlist, preflight-gated).
-4. **W-method conformance oracle** for the learner (soundness within a bound).
+4. **M4 — real `TargetAdapter`** — only if a promoted TPI-L hypothesis genuinely needs a
+   bespoke runner the *grab* toolchain can't express; ROE hard-wired (X-Bug-Bounty header,
+   own-accounts-only, in-scope allowlist, preflight-gated). The revocation matrix is the
+   most ROE-compatible mode to bring live first.
+5. **W-method conformance oracle** for the learner (soundness within a bound).
 
 ---
 
@@ -254,6 +280,18 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M12: revocation matrix — a second hunting mode.**
+  Deepest addition since the agent loop. The real-engagement work showed the crown jewel is
+  the mutation × predating-binding matrix (does transition M revoke binding B?), which lived
+  only as prose. Made it a computable object: `matrix.py` + a single-principal, own-account,
+  reversible cell runner with per-cell positive/negative controls; a SURVIVED cell is TPI-4
+  laundering. Extended the mock with binding capture/re-present and a per-mutation `revokes`
+  model. Wired into `HuntSession`/MCP (`revocation_matrix()` tool) and the report bundle
+  (mode-aware). On the *patched* mock it finds the logout flow still leaking while the reset
+  flow revokes — Composition-Blindness made visible. This is also the **ROE-safe mode** for
+  the Grab engagement (own-account, no reading others' data), directly operationalizing
+  TPI-L1. +5 tests (suite 36), 9 demos, isolation intact. **Next: richer mint/mutation kinds
+  + cross-plane re-presentation** (see *Pick this up next*).
 - **2026-09-15** — *Session 3 (cont).* **M4 redirected — TPI as an offline lens over a real
   engagement, not a live adapter.** Owner named the real target: an active, authorized Grab
   HackerOne engagement at `~/singularity/grab` (separate repo, mature ATO model — 90 threat

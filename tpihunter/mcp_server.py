@@ -67,6 +67,16 @@ def build_server():
         return session.findings()
 
     @server.tool()
+    def revocation_matrix() -> dict:
+        """The own-account lifecycle hunt (single-principal, reversible, reads no one
+        else's data). For each way of minting a session and each credential-mutating
+        transition, measures whether the mutation revokes a session minted BEFORE it. A
+        SURVIVED cell is TPI-4 laundering — a stolen session that outlives the owner's
+        logout or reset. Reach for this first on a real authorized target. Returns the
+        grid, a rendered table, and the laundering cells with per-cell controls."""
+        return session.revocation_matrix()
+
+    @server.tool()
     def report(fmt: str = "markdown") -> dict:
         """A shareable, submittable evidence bundle for the distinct bugs found so far.
         fmt: "markdown" (a document to paste into a report) or "json" (structured). Each

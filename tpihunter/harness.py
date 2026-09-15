@@ -32,6 +32,20 @@ _DISPATCH = {
 }
 
 
+def execute_action(adapter, principal, action: str, params: dict) -> Observation:
+    """Run one alphabet action on the adapter and return its Observation. Uses the
+    built-in dispatcher for the known verbs and a generic fallback
+    (`adapter.<action>(principal, **params)`) for synthesized ones — the same rule
+    `run_plan` uses, factored out so other drivers (e.g. the revocation matrix) share it."""
+    fn = _DISPATCH.get(action)
+    if fn is not None:
+        return fn(adapter, principal, params)
+    method = getattr(adapter, action, None)
+    if method is None:
+        return Observation(False, note=f"action '{action}' has no binding on this target")
+    return method(principal, **params)
+
+
 @dataclass
 class Step:
     principal: Optional[Principal]
@@ -58,17 +72,7 @@ def run_plan(adapter, plan: Plan, oracle: AtoOracle) -> tuple[Verdict, Trace]:
         elif s.action == "assess":
             verdict = oracle.assess(trace)
         else:
-            fn = _DISPATCH.get(s.action)
-            if fn is not None:
-                obs = fn(adapter, s.principal, s.params)
-            else:
-                # a synthesized action: execute it generically via the adapter's method
-                # of the same name (adapter.<action>(principal, **params)).
-                method = getattr(adapter, s.action, None)
-                if method is None:
-                    obs = Observation(False, note=f"action '{s.action}' has no binding on this target")
-                else:
-                    obs = method(s.principal, **s.params)
+            obs = execute_action(adapter, s.principal, s.action, s.params)
             trace.record(s.principal, s.action, s.params, obs)
     assert verdict is not None, "plan must contain an 'assess' checkpoint"
     return verdict, trace

@@ -10,6 +10,8 @@ The agent's workflow over the tools:
     list_actions()        -> the known action alphabet (effects, ordering, channel)
     run_probe(steps)      -> execute a two-principal probe; get the oracle's verdict
     ... repeat run_probe, adapting to verdicts ...
+    revocation_matrix()   -> the own-account lifecycle mode: does each mutation revoke
+                             each predating binding? (single-principal, reversible)
     findings()            -> the distinct bugs found so far (deduplicated)
 
 Each method returns plain JSON-able dicts.
@@ -22,6 +24,7 @@ from .clauses import CLAUSES
 from .dedup import deduplicate
 from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate
 from .harness import run_plan
+from .matrix import RevocationMatrix, default_mints, default_mutations
 from .mock_target import MockAdapter
 from .oracle import AtoOracle
 from .types import Principal
@@ -106,6 +109,12 @@ class HuntSession:
                 "suspect one exists, register_action(id, effect, requires, needs_control) "
                 "and probe with it — a fix applied to one flow is often missing on a "
                 "parallel one.",
+                "There is a second, single-principal mode: revocation_matrix(). It asks, for "
+                "each way of minting a session and each credential-mutating transition, "
+                "whether the mutation revokes a session minted BEFORE it. A SURVIVED cell is "
+                "a stolen session that outlives the owner's logout/reset (TPI-4). It is "
+                "own-account and reversible — the safe mode to reach for first on a real, "
+                "authorized target where reading another principal's data is not permitted.",
                 "Call findings() to get the distinct bugs (deduplicated, with minimal repro).",
             ],
             "extending_the_alphabet": (
@@ -157,6 +166,32 @@ class HuntSession:
         if unbound:
             out["unbound_actions"] = unbound   # registered but the target has no such flow
         return out
+
+    def revocation_matrix(self) -> dict:
+        """The own-account lifecycle hunt: for each way of minting a session and each
+        credential-mutating transition, does the mutation revoke a session minted before
+        it? A SURVIVED cell is TPI-4 laundering (a stolen session that outlives the
+        owner's logout/reset). Single-principal, reversible, reads no one else's data —
+        the ROE-safe mode for a real engagement. Each cell carries its own positive and
+        negative control, so a SURVIVED verdict is not a broken-check artifact."""
+        owner = Principal("owner")
+        email = "owner@corp.example"
+        control = {owner.name: {email}}
+
+        def factory():
+            return MockAdapter(patched=self.patched, control=control)
+
+        matrix = RevocationMatrix(owner, default_mints(email), default_mutations(email))
+        results = matrix.run(factory)
+        findings = matrix.findings(results)
+        return {
+            "grid": {f"{mid}|{xid}": v.survival.value for (mid, xid), v in results.items()},
+            "rendered": matrix.render(results),
+            "laundering_cells": len(findings),
+            "findings": [{"clause_id": v.clause_id, "mint": v.mint_id,
+                          "mutation": v.mutation_id, "note": v.note, "evidence": v.evidence}
+                         for v in findings],
+        }
 
     def _effects(self) -> dict:
         return {name: s.effect.value for name, s in self.specs.items()}

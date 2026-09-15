@@ -30,8 +30,13 @@ class _Account:
 
 
 class VulnerableTarget:
-    def __init__(self, patched: bool = False) -> None:
+    def __init__(self, patched: bool = False, revokes: Optional[set] = None) -> None:
         self.patched = patched
+        # Which credential-mutating transitions actually revoke predating sessions.
+        # This is the revocation-matrix substrate: real systems fix one flow and forget
+        # a parallel one (e.g. a reset revokes but a plane-local logout does not). Empty
+        # default => logout leaves captured tokens alive (a T-ATO-05-shaped latent bug).
+        self.revokes: set = set(revokes or ())
         self.accounts: dict[str, _Account] = {}
         self.by_email: dict[str, str] = {}
         self.sessions: dict[str, str] = {}        # token -> account_id
@@ -107,7 +112,7 @@ class VulnerableTarget:
             return None, None
         aid, _email_at_request = rec
         acc = self.accounts[aid]
-        if self.patched:
+        if self.patched or "reset_consume" in self.revokes:
             # TPI-4 session-kill-on-credential-change: a reset invalidates every
             # session whose provenance predates it.
             for tok in list(acc.sessions):
@@ -115,6 +120,19 @@ class VulnerableTarget:
             acc.sessions.clear()
         acc.password = new_password
         return self._issue(aid), aid
+
+    def logout(self, token: Optional[str]) -> bool:
+        """End a session. Whether it actually revokes the *credential* (removes the
+        token server-side) depends on `revokes` — a plane-local logout that only clears
+        client state leaves the token alive, which is the laundering the matrix hunts."""
+        if not token:
+            return False
+        acc = self.account_of(token)
+        if "logout" in self.revokes:
+            self.sessions.pop(token, None)
+            if acc:
+                acc.sessions.discard(token)
+        return acc is not None
 
     def account_of(self, token: Optional[str]) -> Optional[_Account]:
         aid = self.sessions.get(token) if token else None
@@ -124,8 +142,9 @@ class VulnerableTarget:
 class MockAdapter:
     """Binds the alphabet Sigma to the mock, keeping one session per principal."""
 
-    def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None) -> None:
-        self.t = VulnerableTarget(patched=patched)
+    def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None,
+                 revokes: Optional[set] = None) -> None:
+        self.t = VulnerableTarget(patched=patched, revokes=revokes)
         self.inbox = InMemoryInbox()
         self.sess: dict[str, Optional[str]] = {}     # principal name -> session token
         # Who genuinely controls which identifier (IdP account / inbox). Channel-proof
@@ -192,12 +211,27 @@ class MockAdapter:
                            note=f"{p} consumed the reset token from the {email} inbox and set a new password")
 
     def logout(self, p: Principal) -> Observation:
+        token = self.sess.get(p.name)
+        self.t.logout(token)
         self.sess[p.name] = None
-        return Observation(True)
+        return Observation(True, note=f"{p} logged out")
 
     # -- oracle surface -------------------------------------------------------
     def whoami(self, p: Principal) -> Observation:
         acc = self.t.account_of(self.sess.get(p.name))
+        return Observation(acc is not None, identity=(acc.email if acc else None))
+
+    # -- binding lifecycle surface (revocation matrix) ------------------------
+    def capture_binding(self, p: Principal) -> Optional[str]:
+        """Snapshot the principal's current durable credential (its session token), so
+        it can be re-presented later — the analogue of capturing a bearer token to test
+        whether a mutation revokes it."""
+        return self.sess.get(p.name)
+
+    def present_binding(self, handle: Optional[str]) -> Observation:
+        """Present a previously-captured credential directly (not via a principal's live
+        session) and report whether it still authenticates, and to what identity."""
+        acc = self.t.account_of(handle)
         return Observation(acc is not None, identity=(acc.email if acc else None))
 
     def plant_marker(self, p: Principal, value: str) -> Observation:

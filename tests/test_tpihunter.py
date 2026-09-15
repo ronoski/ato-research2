@@ -329,6 +329,74 @@ class TestNewActionSynthesis(unittest.TestCase):
         self.assertEqual([b.clause_id for b in res.bugs], ["TPI-1"])
 
 
+class TestRevocationMatrix(unittest.TestCase):
+    def _factory(self, patched, revokes):
+        owner = Principal("owner")
+        control = {owner.name: {"owner@corp.example"}}
+        return lambda: MockAdapter(patched=patched, control=control, revokes=revokes)
+
+    def _matrix(self):
+        from tpihunter.matrix import RevocationMatrix, default_mints, default_mutations
+        owner = Principal("owner")
+        return owner, RevocationMatrix(owner, default_mints("owner@corp.example"),
+                                       default_mutations("owner@corp.example"))
+
+    def test_patched_target_still_leaks_via_logout(self):
+        # the point: a 'patched' target's fix did not propagate to the logout flow
+        from tpihunter.matrix import Survival
+        owner, matrix = self._matrix()
+        results = matrix.run(self._factory(patched=True, revokes=set()))
+        self.assertEqual(results[("password_session", "logout")].survival, Survival.SURVIVED)
+        self.assertEqual(results[("password_session", "password_reset")].survival, Survival.REVOKED)
+        findings = matrix.findings(results)
+        self.assertEqual(len(findings), 2)                 # both mints survive logout
+        self.assertTrue(all(f.clause_id == "TPI-4" for f in findings))
+
+    def test_full_revocation_is_clean(self):
+        from tpihunter.matrix import Survival
+        owner, matrix = self._matrix()
+        results = matrix.run(self._factory(patched=True, revokes={"logout"}))
+        self.assertTrue(all(v.survival is Survival.REVOKED for v in results.values()))
+        self.assertEqual(matrix.findings(results), [])
+
+    def test_cell_negative_control_guards_false_positive(self):
+        # if present_binding accepted anything, the cell must refuse to call it a finding
+        from tpihunter.matrix import run_cell, Survival, default_mints, default_mutations
+        owner = Principal("owner")
+        control = {owner.name: {"owner@corp.example"}}
+
+        class BrokenAdapter(MockAdapter):
+            def present_binding(self, handle):
+                from tpihunter.types import Observation
+                return Observation(True, identity="owner@corp.example")  # accepts everything
+
+        mint = default_mints("owner@corp.example")[0]
+        mutation = default_mutations("owner@corp.example")[0]
+        v = run_cell(lambda: BrokenAdapter(patched=True, control=control),
+                     mint, mutation, owner)
+        self.assertEqual(v.survival, Survival.INCONCLUSIVE)
+
+    def test_huntsession_exposes_matrix(self):
+        from tpihunter.mcp_tools import HuntSession
+        m = HuntSession(target="mock-patched").revocation_matrix()
+        self.assertEqual(m["laundering_cells"], 2)
+        self.assertIn("SURVIVED", m["rendered"])
+
+    def test_survived_cell_renders_as_report(self):
+        from tpihunter.matrix import RevocationMatrix, default_mints, default_mutations
+        from tpihunter.report import revocation_report
+        owner = Principal("owner")
+        control = {owner.name: {"owner@corp.example"}}
+        matrix = RevocationMatrix(owner, default_mints("owner@corp.example"),
+                                  default_mutations("owner@corp.example"))
+        res = matrix.run(lambda: MockAdapter(patched=True, control=control))
+        rep = revocation_report(matrix.findings(res)[0], email="owner@corp.example")
+        self.assertEqual(rep.clause_id, "TPI-4")
+        md = rep.to_markdown()
+        self.assertIn("single account you own", md)   # mode-aware preamble
+        self.assertIn("Remediation", md)
+
+
 class TestReport(unittest.TestCase):
     def _session_with_bugs(self):
         from tpihunter.mcp_tools import HuntSession

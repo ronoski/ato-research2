@@ -57,6 +57,34 @@ resolved account identity, which a correctly-scoped app never shares between two
 principals. The `patched=True` toggle on the mock is the oracle's own regression
 test — a detector that fired on both the bug and its fix would be worthless.
 
+## The revocation matrix (the second mode)
+
+The oracle hunts *confluence* — two principals, does the attacker read the victim's
+data. But the sharpest expression of Composition-Blindness is a different,
+**single-principal, over-time** question, and it is the mode that fits a real
+authorized engagement (own-account, reversible, reads no one else's data):
+
+> for each binding **B** minted before a credential-mutating transition **M**,
+> does **M** revoke **B**?
+
+`matrix.py` makes that a computable grid — mutations as columns, ways-of-minting-a-session
+as rows, each cell a measured `revoked | survived`. A **SURVIVED** cell is TPI-4
+laundering: a stolen session that outlives the owner's own logout or password reset.
+
+```
+python3 -m tpihunter.matrix_demo
+```
+
+Against the **patched** mock — the target whose pre-hijacking bugs are all fixed — the
+matrix still finds red cells: the password-reset flow revokes predating sessions, but the
+parallel **logout** flow does not. One red cell in a green column is Composition-Blindness
+made visible, and it is exactly the shape a real engagement surfaces (a fix that didn't
+propagate to a parallel flow). Every cell carries its own **positive control** (B
+authenticated before M) and **negative control** (a never-valid handle is rejected), so a
+SURVIVED verdict can't be a broken-check artifact. Drive it from the agent with the
+`revocation_matrix()` tool; a SURVIVED cell renders as a submittable report via
+`report.revocation_report`.
+
 ## Files
 
 | file | role |
@@ -78,6 +106,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `llm.py` | real-model backend for `LLMStrategist` (lazy `anthropic`; default `claude-opus-5`) |
 | `mcp_tools.py` | `HuntSession` — the hunt loop as agent-drivable tools (stdlib) |
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
+| `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
@@ -86,6 +115,7 @@ test — a detector that fired on both the bug and its fix would be worthless.
 | `agent_demo.py` | self-test of the agent loop (enumerator vs a fake-LLM strategist) |
 | `live_agent_demo.py` | the real LLM strategist on the mock (gated by `TPIHUNTER_LIVE=1`) |
 | `newaction_demo.py` | the agent registering a new action to find a bug beyond the alphabet |
+| `matrix_demo.py` | the revocation matrix on a 'patched' target — one flow still leaks |
 | `report_demo.py` | hunt the mock, then print the submittable evidence bundle |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.

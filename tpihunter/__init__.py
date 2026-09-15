@@ -18,9 +18,11 @@ from .agent import (AgentHunter, EnumeratorStrategist, HuntResult, HuntState,
                     LLMStrategist, Strategist)
 from .clauses import CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
-from .harness import Plan, Step, run_plan
+from .harness import Plan, Step, execute_action, run_plan
+from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
+                     default_mints, default_mutations, run_cell)
 from .mcp_tools import HuntSession
-from .report import Report, build_bundle, build_report, bundle_to_json, bundle_to_markdown, make_run_fn
+from .report import Report, build_bundle, build_report, bundle_to_json, bundle_to_markdown, make_run_fn, revocation_report
 from .oracle import AtoOracle, Evidence, Severity, Verdict
 from .types import Channel, Identifier, Observation, Principal, ProofEvent, TrustLevel
 
@@ -34,7 +36,10 @@ __all__ = [
     "HuntState", "HuntResult",
     "Cluster", "deduplicate",
     "HuntSession",
-    "Report", "build_report", "build_bundle", "bundle_to_markdown", "bundle_to_json", "make_run_fn",
+    "RevocationMatrix", "MintSpec", "MutationSpec", "CellVerdict", "Survival",
+    "default_mints", "default_mutations", "run_cell", "execute_action",
+    "Report", "build_report", "build_bundle", "bundle_to_markdown", "bundle_to_json",
+    "make_run_fn", "revocation_report",
     "CLAUSES", "FailureMode",
     "Plan", "Step", "run_plan",
     "AtoOracle", "Evidence", "Severity", "Verdict",

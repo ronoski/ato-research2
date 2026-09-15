@@ -26,6 +26,7 @@ python3 -m tpihunter.learn_demo  # automata learning: recovers the target's auth
 python3 -m tpihunter.synth_demo  # the closed loop: learn → synthesize action model → enumerate
 python3 -m tpihunter.agent_demo  # agent as hunter: a strategist drives the loop (enumerator vs LLM seam)
 python3 -m tpihunter.newaction_demo  # the agent registers a new action to find a bug beyond the alphabet
+python3 -m tpihunter.matrix_demo # the revocation matrix: a 'patched' target still leaks via a parallel flow
 python3 -m tpihunter.report_demo # turn the findings into a submittable evidence bundle
 ```
 
