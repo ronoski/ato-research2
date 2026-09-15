@@ -27,12 +27,13 @@ class _Account:
         self.password: Optional[str] = None      # one credential bound to the row
         self.marker: Optional[str] = None        # the private resource that holds a canary
         self.sessions: set[str] = set()
+        self.factors: set[str] = set()           # enrolled 2nd-factor ids (passkey/biometric)
 
 
 class VulnerableTarget:
     def __init__(self, patched: bool = False, revokes: Optional[set] = None,
                  planes: Optional[tuple] = None, plane_local: Optional[set] = None,
-                 mutation_planes: Optional[dict] = None) -> None:
+                 mutation_planes: Optional[dict] = None, revoke_factors: Optional[set] = None) -> None:
         self.patched = patched
         # Which credential-mutating transitions actually revoke predating sessions.
         # This is the revocation-matrix substrate: real systems fix one flow and forget
@@ -47,10 +48,14 @@ class VulnerableTarget:
         # clears client state on its own plane while the token lives on the others).
         self.plane_local: set = set(plane_local or ())
         self.mutation_planes: dict = dict(mutation_planes or {"logout": "mts", "reset_consume": "auth"})
+        # Mutations that revoke enrolled FACTORS (default empty: a factor an attacker
+        # enrolled survives the victim's password reset — the durable takeover, Grab T-ATO-22).
+        self.revoke_factors: set = set(revoke_factors or ())
         self.accounts: dict[str, _Account] = {}
         self.by_email: dict[str, str] = {}
         self.sessions: dict[str, str] = {}        # token -> account_id (global bookkeeping)
         self.plane_sessions: dict[str, set] = {p: set() for p in self.planes}  # per-plane validity
+        self.factors: dict[str, str] = {}         # factor_id -> account_id
         self.reset_tokens: dict[str, tuple[str, str]] = {}   # token -> (account_id, email_at_request)
         self._n = 0
 
@@ -76,8 +81,38 @@ class VulnerableTarget:
         for p in self.planes:
             self.plane_sessions[p].discard(token)
 
+    def _revoke_sessions(self, acc: "_Account", action: str) -> None:
+        """Revoke every session on the account, respecting plane-locality of `action`."""
+        for tok in list(acc.sessions):
+            if action in self.plane_local:
+                self.plane_sessions[self._issuing_plane(action)].discard(tok)
+            else:
+                self._revoke_global(tok, acc)
+
     def token_valid_on_plane(self, token: Optional[str], plane: str) -> bool:
         return bool(token) and token in self.plane_sessions.get(plane, set())
+
+    # -- factor bindings ------------------------------------------------------
+    def enroll_factor(self, aid: str) -> str:
+        fid = "fac_" + secrets.token_hex(6)
+        self.factors[fid] = aid
+        self.accounts[aid].factors.add(fid)
+        return fid
+
+    def factor_account(self, fid: Optional[str]) -> Optional["_Account"]:
+        aid = self.factors.get(fid) if fid else None
+        return self.accounts.get(aid) if aid else None
+
+    def change_email(self, token: str, new_email: str) -> Optional[str]:
+        acc = self.account_of(token)
+        if acc is None:
+            return None
+        self.by_email.pop(acc.email, None)
+        acc.email = new_email
+        self.by_email[new_email] = acc.id
+        if self.patched:            # an identity rebind should end sessions minted under the old email
+            self._revoke_sessions(acc, "email_change")
+        return acc.id
 
     def _get_or_create(self, email: str) -> _Account:
         aid = self.by_email.get(email)
@@ -139,14 +174,15 @@ class VulnerableTarget:
         aid, _email_at_request = rec
         acc = self.accounts[aid]
         if self.patched or "reset_consume" in self.revokes:
-            # TPI-4 session-kill-on-credential-change: a reset invalidates every
-            # session whose provenance predates it. A credential change revokes
-            # globally (not plane-local) unless configured otherwise.
-            for tok in list(acc.sessions):
-                if "reset_consume" in self.plane_local:
-                    self.plane_sessions[self._issuing_plane("reset_consume")].discard(tok)
-                else:
-                    self._revoke_global(tok, acc)
+            # TPI-4 session-kill-on-credential-change: a reset invalidates every session
+            # whose provenance predates it.
+            self._revoke_sessions(acc, "reset_consume")
+        if "reset_consume" in self.revoke_factors:
+            # A remediation reset should also invalidate an attacker-enrolled factor;
+            # by default it does NOT (the durable-takeover bug, Grab T-ATO-22).
+            for fid in list(acc.factors):
+                self.factors.pop(fid, None)
+            acc.factors.clear()
         acc.password = new_password
         return self._issue(aid), aid
 
@@ -175,10 +211,13 @@ class MockAdapter:
 
     def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None,
                  revokes: Optional[set] = None, planes: Optional[tuple] = None,
-                 plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None) -> None:
+                 plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None,
+                 revoke_factors: Optional[set] = None) -> None:
         self.t = VulnerableTarget(patched=patched, revokes=revokes, planes=planes,
-                                  plane_local=plane_local, mutation_planes=mutation_planes)
+                                  plane_local=plane_local, mutation_planes=mutation_planes,
+                                  revoke_factors=revoke_factors)
         self.inbox = InMemoryInbox()
+        self.factor_of: dict[str, Optional[str]] = {}   # principal -> its most-recent factor id
         self.sess: dict[str, Optional[str]] = {}     # principal name -> session token
         # Who genuinely controls which identifier (IdP account / inbox). Channel-proof
         # actions (sso_login, reset_consume) only succeed for a principal who controls
@@ -249,28 +288,50 @@ class MockAdapter:
         self.sess[p.name] = None
         return Observation(True, note=f"{p} logged out")
 
+    def enroll_factor(self, p: Principal) -> Observation:
+        """Enrol a second factor (passkey/biometric) on the acting session's account —
+        a durable binding independent of the session that minted it."""
+        acc = self.t.account_of(self.sess.get(p.name))
+        if acc is None:
+            return Observation(False, note=f"{p} has no session to enrol a factor on")
+        fid = self.t.enroll_factor(acc.id)
+        self.factor_of[p.name] = fid
+        return Observation(True, identity=acc.email, extracted={"factor": fid},
+                           note=f"{p} enrolled a passkey/biometric factor on {acc.email}")
+
+    def email_change(self, p: Principal, new_email: str) -> Observation:
+        token = self.sess.get(p.name)
+        aid = self.t.change_email(token, new_email)
+        return Observation(aid is not None, identity=new_email,
+                           note=f"{p} changed the account email to {new_email}")
+
     # -- oracle surface -------------------------------------------------------
     def whoami(self, p: Principal) -> Observation:
         acc = self.t.account_of(self.sess.get(p.name))
         return Observation(acc is not None, identity=(acc.email if acc else None))
 
     # -- binding lifecycle surface (revocation matrix) ------------------------
-    def capture_binding(self, p: Principal) -> Optional[str]:
-        """Snapshot the principal's current durable credential (its session token), so
-        it can be re-presented later — the analogue of capturing a bearer token to test
-        whether a mutation revokes it."""
+    def capture_binding(self, p: Principal, kind: str = "session") -> Optional[str]:
+        """Snapshot a durable credential the principal holds, so it can be re-presented
+        later. `kind` "session" captures the session token; "factor" captures the id of
+        the factor the principal most recently enrolled."""
+        if kind == "factor":
+            return self.factor_of.get(p.name)
         return self.sess.get(p.name)
 
     def planes(self) -> tuple:
         """The verify-point planes this target exposes. Revocation may be per-plane, so
         a binding must be checked on each — a mutation that revokes on one plane may
-        leave the credential alive on another."""
+        leave the credential alive on another. (Factor bindings are plane-independent.)"""
         return self.t.planes
 
     def present_binding(self, handle: Optional[str], plane: Optional[str] = None) -> Observation:
-        """Present a previously-captured credential and report whether it still
-        authenticates — on a specific `plane` when given (the cross-plane survival
-        question), else globally."""
+        """Present a previously-captured credential and report whether it still grants
+        access. A factor handle is checked for enrolment (plane-independent); a session
+        handle is checked on a specific `plane` when given, else globally."""
+        if handle in self.t.factors:
+            acc = self.t.factor_account(handle)
+            return Observation(acc is not None, identity=(acc.email if acc else None))
         acc = self.t.account_of(handle)
         if plane is None:
             return Observation(acc is not None, identity=(acc.email if acc else None))

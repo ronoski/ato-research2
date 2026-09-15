@@ -29,6 +29,8 @@ _DISPATCH = {
     "reset_request":  lambda a, p, prm: a.reset_request(p, prm["email"]),
     "reset_consume":  lambda a, p, prm: a.reset_consume(p, prm["email"], prm.get("new_password", "Pwn!pw12345")),
     "logout":         lambda a, p, prm: a.logout(p),
+    "enroll_factor":  lambda a, p, prm: a.enroll_factor(p),
+    "email_change":   lambda a, p, prm: a.email_change(p, prm.get("new_email", "changed@corp.example")),
 }
 
 

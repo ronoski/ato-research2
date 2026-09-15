@@ -232,15 +232,21 @@ def bundle_to_json(reports: list) -> str:
 #  Revocation-matrix findings render to the same report shape.
 # --------------------------------------------------------------------------- #
 def revocation_report(cell, *, email: str) -> Report:
-    """Assemble a Report from a matrix `CellVerdict` whose survival is SURVIVED."""
+    """Assemble a Report from a matrix `CellVerdict` whose survival is SURVIVED or SPLIT."""
     clause = CLAUSES.get(cell.clause_id) if cell.clause_id else None
+    kind = getattr(cell, "binding_kind", "session")
+    b = "factor" if kind == "factor" else "session"
+    mint_step = ("enrol a factor, then capture its id" if kind == "factor"
+                 else "establish a session, then capture its credential")
+    outlives = ("An attacker-enrolled factor therefore outlives the account owner's own "
+                "remediation — a durable takeover." if kind == "factor"
+                else "A stolen session therefore outlives the account owner's own remediation.")
     steps = [
-        ReproStep(1, "owner", f"mint:{cell.mint_id}", True,
-                  "establish a session, then capture its credential", None, email),
+        ReproStep(1, "owner", f"mint:{cell.mint_id}", True, mint_step, None, email),
         ReproStep(2, "owner", f"mutate:{cell.mutation_id}", True,
                   "perform the credential-mutating transition on the same account", None, email),
-        ReproStep(3, "owner", "re-present captured credential", True,
-                  "the pre-mutation credential still authenticates — it should have been revoked",
+        ReproStep(3, "owner", f"re-present captured {b}", True,
+                  f"the pre-mutation {b} still grants access — it should have been revoked",
                   None, email),
     ]
     return Report(
@@ -253,10 +259,9 @@ def revocation_report(cell, *, email: str) -> Report:
         minimal_repro=[("owner", f"mint:{cell.mint_id}"), ("owner", f"mutate:{cell.mutation_id}")],
         steps=steps,
         evidence=[{"kind": "binding_survival", "detail": e, "strength": 3} for e in cell.evidence],
-        laundered_proof=f"session minted by '{cell.mint_id}', surviving '{cell.mutation_id}'",
-        narrative=("A session credential minted before a credential-mutating transition still "
-                   f"authenticates after it: {cell.note}. A stolen session therefore outlives "
-                   "the account owner's own remediation."),
+        laundered_proof=f"{b} minted by '{cell.mint_id}', surviving '{cell.mutation_id}'",
+        narrative=(f"A {b} minted before a credential-mutating transition still grants access "
+                   f"after it: {cell.note}. {outlives}"),
         clause_statement=(clause.statement if clause else None),
         variants_collapsed=1,
         mode="revocation",

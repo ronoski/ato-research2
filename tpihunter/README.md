@@ -93,6 +93,16 @@ test calls fixed. The `mock-plane-split` target models it: `logout` revokes only
 plane while the binding lives on `auth`. This is the exact shape of the open cross-plane
 cell on a real engagement (a plane-local logout, the token still valid on another plane).
 
+**The whole lifecycle, honestly.** Rows are ways to *mint* a binding — a password session,
+an SSO session, and an enrolled **passkey/biometric factor** (a durable binding that outlives
+the session that made it). Columns are mutations — logout, password reset, email change. Not
+every mutation must revoke every kind: a passkey is *not* lost on logout, so that cell is
+`n/a`, never a false finding (each `MutationSpec` declares the kinds it is obliged to revoke).
+But a passkey surviving a **password reset** *is* the bug — `passkey_factor × password_reset`
+SURVIVES even on the `mock-patched` target, because the fix reached the session layer and not
+the factor layer: an attacker-enrolled factor outlives the victim's own remediation, a durable
+account takeover (the shape of Grab T-ATO-22, Critical).
+
 ## Files
 
 | file | role |

@@ -330,10 +330,10 @@ class TestNewActionSynthesis(unittest.TestCase):
 
 
 class TestRevocationMatrix(unittest.TestCase):
-    def _factory(self, patched, revokes):
+    def _factory(self, patched, revokes, **kw):
         owner = Principal("owner")
         control = {owner.name: {"owner@corp.example"}}
-        return lambda: MockAdapter(patched=patched, control=control, revokes=revokes)
+        return lambda: MockAdapter(patched=patched, control=control, revokes=revokes, **kw)
 
     def _matrix(self):
         from tpihunter.matrix import RevocationMatrix, default_mints, default_mutations
@@ -341,23 +341,39 @@ class TestRevocationMatrix(unittest.TestCase):
         return owner, RevocationMatrix(owner, default_mints("owner@corp.example"),
                                        default_mutations("owner@corp.example"))
 
-    def test_patched_target_still_leaks_via_logout(self):
-        # the point: a 'patched' target's fix did not propagate to the logout flow
+    def test_patched_target_still_leaks_via_logout_and_factor(self):
+        # a 'patched' target: sessions fixed for reset/email-change, but two holes remain —
+        # logout still leaks the session, and an enrolled factor outlives a password reset
         from tpihunter.matrix import Survival
         owner, matrix = self._matrix()
         results = matrix.run(self._factory(patched=True, revokes=set()))
         self.assertEqual(results[("password_session", "logout")].survival, Survival.SURVIVED)
         self.assertEqual(results[("password_session", "password_reset")].survival, Survival.REVOKED)
+        self.assertEqual(results[("password_session", "email_change")].survival, Survival.REVOKED)
+        # the crown-jewel cell: a passkey survives the victim's password reset
+        self.assertEqual(results[("passkey_factor", "password_reset")].survival, Survival.SURVIVED)
+        # ...and a passkey surviving a logout is NOT a finding (logout need not revoke factors)
+        self.assertEqual(results[("passkey_factor", "logout")].survival, Survival.NOT_APPLICABLE)
         findings = matrix.findings(results)
-        self.assertEqual(len(findings), 2)                 # both mints survive logout
+        self.assertEqual(len(findings), 3)                 # 2 session×logout + 1 factor×reset
         self.assertTrue(all(f.clause_id == "TPI-4" for f in findings))
+
+    def test_factor_not_a_finding_when_not_obliged(self):
+        from tpihunter.matrix import Survival
+        owner, matrix = self._matrix()
+        results = matrix.run(self._factory(patched=True, revokes=set()))
+        na = results[("passkey_factor", "logout")]
+        self.assertEqual(na.survival, Survival.NOT_APPLICABLE)
+        self.assertFalse(na.is_finding)            # measured, but never a finding
 
     def test_full_revocation_is_clean(self):
         from tpihunter.matrix import Survival
         owner, matrix = self._matrix()
-        results = matrix.run(self._factory(patched=True, revokes={"logout"}))
-        self.assertTrue(all(v.survival is Survival.REVOKED for v in results.values()))
+        results = matrix.run(self._factory(patched=True, revokes={"logout"},
+                                           revoke_factors={"reset_consume"}))
         self.assertEqual(matrix.findings(results), [])
+        self.assertTrue(all(v.survival in (Survival.REVOKED, Survival.NOT_APPLICABLE)
+                            for v in results.values()))
 
     def test_cell_negative_control_guards_false_positive(self):
         # if present_binding accepted anything, the cell must refuse to call it a finding
@@ -379,8 +395,10 @@ class TestRevocationMatrix(unittest.TestCase):
     def test_huntsession_exposes_matrix(self):
         from tpihunter.mcp_tools import HuntSession
         m = HuntSession(target="mock-patched").revocation_matrix()
-        self.assertEqual(m["laundering_cells"], 2)
+        # 2 session×logout leaks + 1 factor×reset leak
+        self.assertEqual(m["laundering_cells"], 3)
         self.assertIn("SURVIVED", m["rendered"])
+        self.assertTrue(any("passkey_factor" in f["mint"] for f in m["findings"]))
 
     def test_cross_plane_split_is_detected(self):
         # logout revokes only the plane it is issued on; the binding lives on another
@@ -395,24 +413,28 @@ class TestRevocationMatrix(unittest.TestCase):
         self.assertEqual(cell.per_plane["mts"], Survival.REVOKED)
         self.assertEqual(cell.per_plane["auth"], Survival.SURVIVED)
         self.assertEqual(cell.clause_id, "TPI-4")
-        # a SPLIT is a finding, and the reset column is still clean (global revoke)
         self.assertTrue(cell.is_finding)
+        # the reset column is clean for sessions (global revoke) but the factor still leaks
         self.assertEqual(results[("password_session", "password_reset")].survival, Survival.REVOKED)
+        self.assertEqual(results[("passkey_factor", "password_reset")].survival, Survival.SURVIVED)
 
     def test_plane_split_target_via_huntsession(self):
         from tpihunter.mcp_tools import HuntSession
         m = HuntSession(target="mock-plane-split").revocation_matrix()
-        self.assertEqual(m["laundering_cells"], 2)
+        # 2 session×logout SPLITs + 1 factor×reset SURVIVED
+        self.assertEqual(m["laundering_cells"], 3)
         self.assertIn("SPLIT", m["rendered"])
-        self.assertIn("plane-local", m["findings"][0]["note"])
+        self.assertTrue(any("plane-local" in f["note"] for f in m["findings"]))
 
     def test_global_revocation_across_planes_is_clean(self):
         from tpihunter.matrix import Survival
         owner, matrix = self._matrix()
         factory = lambda: MockAdapter(patched=True, control={owner.name: {"owner@corp.example"}},
-                                      planes=("auth", "mts"), revokes={"logout"})  # not plane_local
+                                      planes=("auth", "mts"), revokes={"logout"},
+                                      revoke_factors={"reset_consume"})   # sessions + factors, not plane_local
         results = matrix.run(factory)
-        self.assertTrue(all(v.survival is Survival.REVOKED for v in results.values()))
+        self.assertTrue(all(v.survival in (Survival.REVOKED, Survival.NOT_APPLICABLE)
+                            for v in results.values()))
 
     def test_survived_cell_renders_as_report(self):
         from tpihunter.matrix import RevocationMatrix, default_mints, default_mutations

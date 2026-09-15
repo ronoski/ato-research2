@@ -44,23 +44,34 @@ class Survival(str, Enum):
     SURVIVED = "survived"        # bad: TPI-4 laundering — the binding outlived the mutation everywhere
     SPLIT = "split"              # bad: revoked on some planes, survived on others — plane-local
                                  #      revocation, the subtle cross-plane bug a same-plane test misses
+    NOT_APPLICABLE = "n/a"       # the mutation is not obliged to revoke this binding kind (a passkey
+                                 #      is not expected to die on logout) — measured but never a finding
     INCONCLUSIVE = "inconclusive"  # a control failed; the cell measured nothing
 
 
 @dataclass(frozen=True)
 class MintSpec:
-    """A short sequence that establishes a durable binding on the acting account."""
+    """A short sequence that establishes a durable binding on the acting account.
+    `kind` is what sort of binding it is — "session" (a bearer token, plane-scoped) or
+    "factor" (an enrolled authenticator, plane-independent). The kind decides how the
+    binding is captured and which mutations are obliged to revoke it."""
     id: str
     steps: tuple          # ((action, params), ...)
     label: str = ""
+    kind: str = "session"
 
 
 @dataclass(frozen=True)
 class MutationSpec:
-    """A credential-mutating transition that *ought* to revoke predating bindings."""
+    """A credential-mutating transition. `revokes_kinds` names the binding kinds it is
+    *obliged* to revoke — logout ends sessions but not passkeys; a remediation password
+    reset should end both. A binding of a kind the mutation need not revoke is measured
+    but marked NOT_APPLICABLE, never a finding — so a passkey surviving a logout is not
+    a false positive, while a passkey surviving a password reset is the real bug."""
     id: str
     steps: tuple
     label: str = ""
+    revokes_kinds: frozenset = frozenset({"session"})
 
 
 @dataclass
@@ -73,31 +84,43 @@ class CellVerdict:
     evidence: list = field(default_factory=list)
     note: str = ""
     per_plane: dict = field(default_factory=dict)   # plane -> Survival (REVOKED/SURVIVED)
+    expected_revoke: bool = True                    # was the mutation obliged to revoke this kind?
+    binding_kind: str = "session"                   # "session" | "factor"
 
     @property
     def is_finding(self) -> bool:
-        return self.survival in (Survival.SURVIVED, Survival.SPLIT)
+        return self.expected_revoke and self.survival in (Survival.SURVIVED, Survival.SPLIT)
 
 
 # --------------------------------------------------------------------------- #
 def default_mints(email: str) -> list[MintSpec]:
-    """Two ways to mint a passenger-style session, on a fresh own account."""
+    """Ways to establish a durable binding on a fresh own account — two session kinds
+    and one factor. The factor is the durable one: it can mint new sessions long after
+    the session that enrolled it is gone, so a mutation that fails to revoke it is the
+    durable-takeover bug."""
     return [
         MintSpec("password_session", (("register", {"email": email, "password": "OwnPw!1"}),),
-                 "a password session (register)"),
+                 "a password session (register)", kind="session"),
         MintSpec("sso_session", (("sso_login", {"email": email}),),
-                 "a federated session (SSO)"),
+                 "a federated session (SSO)", kind="session"),
+        MintSpec("passkey_factor",
+                 (("register", {"email": email, "password": "OwnPw!1"}), ("enroll_factor", {})),
+                 "an enrolled passkey/biometric factor", kind="factor"),
     ]
 
 
 def default_mutations(email: str) -> list[MutationSpec]:
-    """Two credential-mutating transitions that should each end prior sessions."""
+    """Credential-mutating transitions across the account lifecycle, each declaring the
+    binding kinds it is obliged to revoke."""
     return [
-        MutationSpec("logout", (("logout", {}),), "logout"),
+        MutationSpec("logout", (("logout", {}),), "logout",
+                     revokes_kinds=frozenset({"session"})),
         MutationSpec("password_reset",
                      (("reset_request", {"email": email}),
                       ("reset_consume", {"email": email, "new_password": "NewPw!2"})),
-                     "password reset"),
+                     "password reset", revokes_kinds=frozenset({"session", "factor"})),
+        MutationSpec("email_change", (("email_change", {"new_email": "rebound@corp.example"}),),
+                     "email change", revokes_kinds=frozenset({"session"})),
     ]
 
 
@@ -107,16 +130,24 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
     controls on each plane. The credential is checked on every verify-point plane after
     the mutation, so a plane-local revocation (revoked where the mutation was issued,
     alive elsewhere) surfaces as a SPLIT rather than hiding behind a same-plane test."""
+    expected = mint.kind in getattr(mutation, "revokes_kinds", frozenset({"session"}))
+    if not expected:
+        # a passkey is not obliged to die on logout — measure nothing, never a finding
+        return CellVerdict(mint.id, mutation.id, Survival.NOT_APPLICABLE, 0.0, None,
+                           note=f"'{mutation.label or mutation.id}' is not obliged to revoke a "
+                                f"'{mint.kind}' binding", expected_revoke=False)
+
     a = adapter_factory()
     planes = list(a.planes()) if hasattr(a, "planes") else [None]
 
     def inconclusive(note):
-        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None, note=note)
+        return CellVerdict(mint.id, mutation.id, Survival.INCONCLUSIVE, 0.0, None, note=note,
+                           binding_kind=mint.kind)
 
-    # 1. mint the binding and capture a durable handle to it
+    # 1. mint the binding and capture a durable handle to it (of the mint's kind)
     for action, params in mint.steps:
         execute_action(a, principal, action, params)
-    handle = a.capture_binding(principal)
+    handle = a.capture_binding(principal, mint.kind)
     if not handle:
         return inconclusive(f"mint '{mint.id}' established no binding")
 
@@ -151,7 +182,7 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
                            note=f"'{mutation.label or mutation.id}' revoked the "
                                 f"'{mint.label or mint.id}' binding on [{names(revoked)}] but not "
                                 f"[{names(survived)}] — plane-local revocation",
-                           per_plane=per_plane)
+                           per_plane=per_plane, binding_kind=mint.kind)
     if survived:
         ev = [f"binding minted by '{mint.id}' still authenticates after '{mutation.id}' "
               f"on plane(s) [{names(survived)}]",
@@ -159,11 +190,11 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
         return CellVerdict(mint.id, mutation.id, Survival.SURVIVED, 0.95, "TPI-4", ev,
                            note=f"'{mutation.label or mutation.id}' did not revoke the "
                                 f"'{mint.label or mint.id}' binding",
-                           per_plane=per_plane)
+                           per_plane=per_plane, binding_kind=mint.kind)
     return CellVerdict(mint.id, mutation.id, Survival.REVOKED, 0.95, None,
                        note=f"'{mutation.label or mutation.id}' revoked the "
                             f"'{mint.label or mint.id}' binding",
-                       per_plane=per_plane)
+                       per_plane=per_plane, binding_kind=mint.kind)
 
 
 @dataclass
@@ -185,7 +216,8 @@ class RevocationMatrix:
     def render(self, results: dict) -> str:
         """A text grid: mutations as columns, mints as rows."""
         sym = {Survival.REVOKED: "revoked ", Survival.SURVIVED: "SURVIVED",
-               Survival.SPLIT: "SPLIT ⚠", Survival.INCONCLUSIVE: "  --    "}
+               Survival.SPLIT: "SPLIT ⚠", Survival.NOT_APPLICABLE: "  n/a   ",
+               Survival.INCONCLUSIVE: "  --    "}
         w = max([len(m.id) for m in self.mints] + [8])
         head = " " * (w + 2) + "  ".join(f"{x.id:^14}" for x in self.mutations)
         lines = [head, " " * (w + 2) + "  ".join("-" * 14 for _ in self.mutations)]

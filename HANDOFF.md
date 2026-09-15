@@ -51,7 +51,7 @@ back to it. (Published copy: https://claude.ai/artifact/LxyHRRCnZB7NNQWP6SF1sC)
 Run the test suite and the seven self-tests — the fastest way to see what exists:
 
 ```bash
-python3 -m unittest discover     # 39 tests: the invariants that must not regress
+python3 -m unittest discover     # 40 tests: the invariants that must not regress
 python3 -m tpihunter.demo         # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo    # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo   # automata learning: L* recovers the mock's auth state machine
@@ -162,10 +162,10 @@ invitations to improve:
   machine can be incomplete for larger alphabets. A W-method / Wp-method conformance oracle
   would make it sound within a bound. *(Still open.)*
 - **Tests are the safety net — extend them with every change.** `tests/test_tpihunter.py`,
-  stdlib `unittest`, **39 tests** covering the load-bearing invariant, the learn→synthesize
+  stdlib `unittest`, **40 tests** covering the load-bearing invariant, the learn→synthesize
   pipeline, dedup, the agent loop + LLM wiring (fake client), the MCP `HuntSession`,
-  new-action synthesis, the revocation matrix (incl. the cross-plane SPLIT), and the report
-  bundle. Add assertions for whatever you build.
+  new-action synthesis, the revocation matrix (cross-plane SPLIT + factor/lifecycle kinds +
+  the expectation model), and the report bundle. Add assertions for whatever you build.
 
 ---
 
@@ -180,7 +180,7 @@ invitations to improve:
   (in `llm.py`) and `mcp` (in `mcp_server.py`) — each lazy-imported so `import tpihunter`
   never needs it. A real HTTP adapter will add `httpx` the same way. Verify with:
   `python3 -c "import tpihunter, sys; assert 'anthropic' not in sys.modules and 'mcp' not in sys.modules"`.
-- **`unittest discover` (39 tests) and all nine demos stay green.** Don't hand back on red.
+- **`unittest discover` (40 tests) and all nine demos stay green.** Don't hand back on red.
 
 ---
 
@@ -191,12 +191,13 @@ confluence (`oracle.py`) and single-principal revocation (`matrix.py`, M12 — t
 fits a real authorized engagement). The frontier is **real targets** and deepening the
 matrix. From `STATUS.md` → *Pick this up next*:
 
-1. **Deepen the revocation matrix (M12) toward real engagements** — the highest-value
-   *unblocked* work. Cross-plane is **done** (SPLIT, `mock-plane-split`, the T-ATO-05 shape).
-   Remaining: more mint/mutation *kinds* — factor-enroll and popkey-rebind as *mints*,
-   PIN-change and email-change as *mutations* — so the grid spans the whole credential
-   lifecycle, not just session logout/reset. (`default_mints`/`default_mutations` in
-   `matrix.py` are where you add them; the mock needs the corresponding flows.)
+1. **The revocation matrix (M12) is now rich** — cross-plane (SPLIT) *and* lifecycle kinds
+   (session + factor mints; logout/reset/email-change mutations; an expectation model so a
+   passkey surviving logout is `n/a`, not a false finding). It maps cleanly onto the Grab
+   lens (TPI-L1 logout/plane, TPI-L2 reset survival, T-ATO-22 factor-survives-reset). The
+   highest-value next step is no longer more mock kinds — it is **running this matrix against
+   a real target** (below). A minor pure-mock extension (popkey-rebind mint, PIN-change
+   mutation) exists but is low-value vs. going live.
 2. **M4 — real `TargetAdapter`** (blocked on an authorized target from the owner). When
    unblocked, **bring the revocation matrix live first** — it is the most ROE-compatible
    mode (own-account, reversible, reads no one else's data), which is precisely why the real
@@ -231,4 +232,4 @@ milestone `🚧 IN PROGRESS — <your handle>, <date>`).
 - `gh` is authenticated as **ronoski** (`repo` scope); git identity is set. `git push` works over HTTPS.
 - Python 3; the core is stdlib-only, no virtualenv needed. Run modules from the repo root as `python3 -m tpihunter.<name>`; tests as `python3 -m unittest discover`. Optional extras only for the two integrations: `pip install anthropic` (API strategist) and `pip install "mcp[cli]"` (MCP server / the owner's Max-subscription path).
 - `gh` authenticated as **ronoski** (`repo` scope); git identity set; `git push` works over HTTPS. The owner hunts on a **Claude Max 20x subscription** — prefer the MCP path (M10), not the pay-per-token API path, for anything the owner runs.
-- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis. Each shift is one or more commits ending with a `Co-Authored-By` line.
+- Commit history (see `git log`): initial (M0–M2) → M3 core → M3 complete → M5 dedup → M8 agent loop → M9 API strategist → M10 MCP server → M11 new-action synthesis → M7 evidence bundle → M4-redirect (Grab lens) → M12 revocation matrix → M12 cross-plane axis → M12 lifecycle kinds. Each shift is one or more commits ending with a `Co-Authored-By` line.

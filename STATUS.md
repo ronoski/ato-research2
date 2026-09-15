@@ -16,7 +16,7 @@ target is an LLM strategist that adapts. Judge every task by: *does it move us t
 live agent driving the loop?*
 
 **Baseline (last verified green): 2026-09-15.** Test suite + nine self-tests pass:
-`python3 -m unittest discover` (39 tests), and `python3 -m tpihunter.{demo,enum_demo,
+`python3 -m unittest discover` (40 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo}`
 (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP server for the Claude Code agent:
 `python3 -m tpihunter.mcp_server` (needs `mcp`).
@@ -41,7 +41,7 @@ learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matr
 | refine | `dedup` — causal minimization → distinct bugs | ✅ done (M5) |
 | **control** | `AgentHunter` + `Strategist` seam (enumerator / LLM) | ✅ done (M8); API strategist = M9 ✓; Claude-Code/Max strategist = M10 ✓ |
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
-| **revocation** | `matrix` — mutation × predating-binding lifecycle mode, per-plane (own-account) | ✅ done (M12, +cross-plane) |
+| **revocation** | `matrix` — mutation × binding-kind × plane lifecycle mode (own-account) | ✅ done (M12; +cross-plane, +factor/lifecycle kinds) |
 
 ---
 
@@ -244,10 +244,12 @@ deferred**, not the next task. In priority order now:
    one). If the owner promotes a TPI-L composition cell (e.g. TPI-L1 logout-propagation),
    help turn it into a house-format `hunts/G<n>/HYPOTHESIS.md` — through *their*
    `tools/hunt.py preflight` gate; **no firing without the owner's OK; filing is theirs.**
-2. **Extend the revocation matrix (M12) toward real engagements.** Cross-plane is done
-   (SPLIT, `mock-plane-split`). Remaining value: more mint/mutation *kinds* — factor-enroll
-   and popkey-rebind as mints, PIN-change and email-change as mutations — so the grid spans
-   the whole credential lifecycle, not just session logout/reset.
+2. **Bring the revocation matrix live (needs M4 / an authorized target).** It is now rich
+   (session + factor kinds, email-change/reset/logout mutations, per-plane, expectation
+   model) and it is the most ROE-compatible mode — own-account, reversible. The remaining
+   pure-mock extension (popkey-rebind mint, PIN-change mutation) is low-value vs. running the
+   current matrix against something real. On the Grab lens, the matrix already maps to TPI-L1
+   (logout/plane), TPI-L2 (reset survival) and T-ATO-22 (factor survives reset).
 3. **Robustness (do-able now against the mock, de-risks any future live adapter):**
    oracle retry on a suspect verdict, and a param model richer than email-only for
    synthesized actions (magic-link codes, invites, aliasing).
@@ -286,6 +288,19 @@ deferred**, not the next task. In priority order now:
 
 ## Changelog  *(append-only, newest first)*
 
+- **2026-09-15** — *Session 3 (cont).* **M12 lifecycle kinds.** Extended the matrix from
+  session-only to the whole credential lifecycle: a **factor** mint (enrol a passkey/
+  biometric — a durable binding that outlives the session that made it) and an
+  **email-change** mutation, alongside a sharper, more honest model — each mutation now
+  declares which binding *kinds* it is obliged to revoke (`MutationSpec.revokes_kinds`), so
+  a passkey surviving a *logout* is `NOT_APPLICABLE` (not a false finding) while a passkey
+  surviving a *password reset* is the real bug. The crown-jewel cell `passkey_factor ×
+  password_reset` SURVIVES even on the *patched* target — the fix reached the session layer,
+  not the factor layer: an attacker-enrolled factor outlives the victim's password reset
+  (Grab T-ATO-22, Critical, durable takeover). Mock grew factor enrol + email-change +
+  per-kind revocation (`revoke_factors`); `capture_binding(kind)`/`present_binding` dispatch
+  on kind; report wording is kind-aware. Grid is now 3 kinds × 3 mutations × N planes. +1
+  test (suite 40), 9 demos, isolation intact. **Next: bring the matrix live on M4.**
 - **2026-09-15** — *Session 3 (cont).* **M12 cross-plane axis.** Extended the revocation
   matrix to measure each cell **per verify-point plane**. A mutation that revokes on the
   plane it is issued on but leaves the credential alive on another now surfaces as a

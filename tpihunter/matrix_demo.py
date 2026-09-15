@@ -44,24 +44,27 @@ def _run(label: str, **cfg) -> None:
 
 def main() -> None:
     print("\nTPI-HUNTER  -  revocation matrix (own-account, over-time hunting mode)")
-    print(" question per cell: does the mutation revoke a binding minted before it?")
+    print(" rows = ways to mint a binding · cols = credential-mutating transitions")
+    print(" per cell: does the mutation revoke a binding minted before it? (n/a = the")
+    print(" mutation is not obliged to revoke that binding kind — a passkey isn't lost on logout)")
 
-    _run("TARGET: mock-patched  (pre-hijacking bugs fixed — but is the fix uniform?)",
+    _run("TARGET: mock-patched  (pre-hijacking bugs fixed — but is the fix uniform, at every layer?)",
          patched=True)
     _run("TARGET: mock-plane-split  (multi-plane estate — logout revokes only its own plane)",
          patched=True, planes=("auth", "mts"), revokes={"logout"}, plane_local={"logout"})
-    _run("TARGET: fully patched (revoke-on-mutation enforced on every flow, every plane)",
-         patched=True, planes=("auth", "mts"), revokes={"logout"})
+    _run("TARGET: hardened (revoke on every flow, every plane, and the factor layer)",
+         patched=True, planes=("auth", "mts"), revokes={"logout"}, revoke_factors={"reset_consume"})
 
     print("\n " + "=" * 62)
-    print(" Grid 1: on a 'patched' single-plane target the reset flow revokes but the")
-    print("         parallel logout flow does not — SURVIVED.")
-    print(" Grid 2: ⭐ the subtle one. logout DOES revoke — but only on the plane it is")
-    print("         issued on ('mts'); the credential lives on 'auth' — a SPLIT. A")
-    print("         same-plane test would have called this fixed. This is the exact shape")
-    print("         of the open cross-plane cell on the real engagement (Grab T-ATO-05).")
-    print(" Grid 3: logout revokes globally — clean. A matrix red on every target would")
-    print("         be worthless; the discipline is that a fix shows as green.\n")
+    print(" Grid 1: a 'patched' target — sessions are fixed for reset and email-change,")
+    print("         but TWO holes remain: logout still leaks the session (SURVIVED), and")
+    print("         ⭐ a passkey the attacker enrolled OUTLIVES the victim's password reset")
+    print("         (passkey_factor × password_reset). The fix reached the session layer,")
+    print("         not the factor layer — durable takeover (Grab T-ATO-22, Critical).")
+    print(" Grid 2: logout DOES revoke — but only on its own plane ('mts'); the credential")
+    print("         lives on 'auth' — a SPLIT, the bug a same-plane test calls fixed (T-ATO-05).")
+    print(" Grid 3: revocation reaches every flow, plane and layer — clean. A matrix red")
+    print("         on every target would be worthless; the discipline is a fix shows green.\n")
 
 
 if __name__ == "__main__":
