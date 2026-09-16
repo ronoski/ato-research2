@@ -48,6 +48,12 @@ CLAUSES: dict[str, Clause] = {
         "A credential change or password reset must invalidate every session "
         "and outstanding token whose provenance predates it.",
         FailureMode.LAUNDERING),
+    "TPI-6": Clause(
+        "TPI-6", "step-up-not-bypassable",
+        "A privileged action must not accept provenance below the session level "
+        "its own flow demands. If any flow refuses a credential as insufficient "
+        "for a transition, every flow reaching that transition must refuse it.",
+        FailureMode.GAP),
     "TPI-5": Clause(
         "TPI-5", "authenticated-transition",
         "A privileged action must carry provenance empowering the acting "

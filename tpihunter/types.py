@@ -97,4 +97,8 @@ class Observation:
     identity: Optional[str] = None          # account the context resolved to, if any
     extracted: dict = field(default_factory=dict)   # tokens, links, codes, refs, marker values
     proof: Optional[ProofEvent] = None      # the proof event this action emitted, if any
+    session: Optional["SessionLevel"] = None  # the session-trust level this action left the
+                                              # context at. Without this the lattice in Fig. 2
+                                              # is unobservable, so no probe can distinguish a
+                                              # first-factor (PARTIAL) context from a FULL one.
     note: str = ""
