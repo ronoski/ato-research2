@@ -2253,6 +2253,38 @@ class TestBrowserAdapter(unittest.TestCase):
         self.assertFalse(obs.ok)
         self.assertIn("'#pw' not found", obs.note)
 
+    def test_an_out_of_band_value_is_fetched_when_the_step_runs(self):
+        # the e-mail challenge code exists only AFTER the credentials are submitted;
+        # fetching it earlier yields the previous code, which fails quietly
+        from tpihunter.browser import BrowserAdapter, Expect, Flow, UiStep
+        pages = {"/login": {"text": "", "sets": {}, "sel": ["#email", "#code"],
+                            "labels": ["Sign in"], "goes": {}},
+                 }
+        calls = []
+        def code_provider(vars):
+            calls.append(vars.get("email"))
+            return "424242"
+        prof = self._profile({"login": Flow("login", (
+            UiStep(goto="/login", fill=(("#email", "{email}"),), click="Sign in"),
+            UiStep(fill=(("#code", "{code}"),), expect=Expect(selector="#code")),))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages),
+                           providers={"code": code_provider})
+        obs = a.login(Principal("victim"))
+        self.assertTrue(obs.ok, obs.note)
+        self.assertEqual(a.driver(Principal("victim")).filled["#code"], "424242")
+        self.assertEqual(calls, ["v@t.example"])          # called once, at step time
+
+    def test_an_out_of_band_value_that_never_arrives_fails_loudly(self):
+        from tpihunter.browser import BrowserAdapter, Expect, Flow, UiStep
+        pages = {"/login": {"text": "", "sets": {}, "sel": ["#code"], "labels": []}}
+        prof = self._profile({"login": Flow("login", (
+            UiStep(goto="/login", fill=(("#code", "{code}"),), expect=Expect(selector="#code")),))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages),
+                           providers={"code": lambda v: None})
+        obs = a.login(Principal("victim"))
+        self.assertFalse(obs.ok)
+        self.assertIn("never arrived", obs.note)
+
     def test_channel_control_is_enforced_before_a_request_is_made(self):
         from tpihunter.browser import BrowserAdapter, Expect, Flow, UiStep
         prof = self._profile({"sso_login": Flow("sso_login", (

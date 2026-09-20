@@ -99,7 +99,15 @@ class Expect:
 
 @dataclass(frozen=True)
 class UiStep:
-    """One interaction. `expect`, where given, is checked immediately after."""
+    """One interaction. `expect`, where given, is checked immediately after.
+
+    Only the final step of a `Flow` is *required* to carry one, but put an `Expect` on any
+    step whose success the NEXT step depends on — above all before a step that waits on an
+    out-of-band value. Measured on a real target: a rejected credential submit with no
+    expectation went unnoticed, and the following step then waited three minutes for an
+    e-mail challenge code that was never sent and reported "the code never arrived". True,
+    and the wrong cause. An expectation costs nothing and names the real failure.
+    """
     goto: Optional[str] = None
     fill: tuple = ()                    # ((selector, value-template), ...)
     click: Optional[str] = None
@@ -158,7 +166,8 @@ class BrowserAdapter:
 
     def __init__(self, profile: BrowserProfile, policy: EngagementPolicy,
                  driver_factory: Callable[[], PageDriver],
-                 control: Optional[dict] = None) -> None:
+                 control: Optional[dict] = None,
+                 providers: Optional[dict] = None) -> None:
         problems = policy.preflight()
         if problems:
             raise ScopeViolation("engagement policy is not ready:\n  - " + "\n  - ".join(problems))
@@ -166,6 +175,11 @@ class BrowserAdapter:
         self.policy = policy
         self._factory = driver_factory
         self.control: dict = {k: set(v) for k, v in (control or {}).items()}
+        # Out-of-band values a step needs but the page cannot supply: an e-mail challenge
+        # code, an SMS one-time code. {placeholder -> callable(vars) -> str}, resolved at
+        # the moment the step runs — a code fetched before the form was submitted is the
+        # previous code, which is the classic way this goes quietly wrong.
+        self.providers: dict = dict(providers or {})
         self._drivers: dict = {}
 
     # -- one independent context per principal --------------------------------
@@ -211,7 +225,11 @@ class BrowserAdapter:
                     raise ScopeViolation(f"{action} step {i}: {problem}")
                 d.goto(url)
             for sel, val in step.fill:
-                if not d.fill(sel, render(val, vars)):
+                val = self._resolve(val, vars)
+                if val is None:
+                    return Observation(False, note=f"{action} step {i}: the out-of-band "
+                                                   f"value for {sel!r} never arrived")
+                if not d.fill(sel, val):
                     return Observation(False, note=f"{action} step {i}: field {sel!r} not found")
             if step.click and not d.click(render(step.click, vars)):
                 return Observation(False, note=f"{action} step {i}: control "
@@ -226,6 +244,16 @@ class BrowserAdapter:
             proof = ProofEvent(p, Identifier(kind, vars.get("email", "")), flow.proof)
         return Observation(met, identity=self._identity(d), proof=proof,
                            note=f"{action}: {untrusted(redact(why), 160)}")
+
+    def _resolve(self, template: str, vars: dict) -> Optional[str]:
+        """Fill a template, calling any provider whose placeholder is still empty."""
+        for name in _PLACEHOLDER.findall(template):
+            if not vars.get(name) and name in self.providers:
+                got = self.providers[name](dict(vars))
+                if got is None:
+                    return None
+                vars[name] = str(got)
+        return render(template, vars)
 
     def _identity(self, d: PageDriver) -> Optional[str]:
         if not self.profile.identity_from:
