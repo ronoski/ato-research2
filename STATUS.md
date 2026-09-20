@@ -45,6 +45,7 @@ server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`
 | **robustness** | oracle confirmation — a verdict must reproduce before it fires | ✅ done (M13) |
 | **sessions** | `sessions` — a session is scarce inventory: reuse before minting, budget the spend | ✅ done (M33) |
 | **step-up** | `stepup_matrix` — TPI-6 across live flows: equal-privilege transitions that disagree | ✅ done (M34) |
+| **audience** | `audience` — TPI-2 across relying parties: a token taken where it was not minted for | ✅ done (M36) |
 | **synthesis** | richer params — synthesized actions take codes/tokens/second identifiers | ✅ done (M14) |
 
 ---

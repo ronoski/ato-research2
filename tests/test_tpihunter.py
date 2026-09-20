@@ -2977,5 +2977,99 @@ class TestStepUpMatrix(unittest.TestCase):
         self.assertTrue(all(c.level is Level.INCONCLUSIVE for c in r.cells))
 
 
+class TestAudienceMatrix(unittest.TestCase):
+    """TPI-2 where identity federates. Most of these assert the mode REFUSES to conclude,
+    because on a real federation surface almost every cell is a near-miss."""
+
+    def _t(self, aud="clientA", sub="user-1"):
+        from tpihunter.audience import Token
+        return Token("tok", "eyJh.eyJh.sig", aud, sub)
+
+    def _auds(self, *ids):
+        from tpihunter.audience import Audience
+        return [Audience(i) for i in ids]
+
+    def _present(self, table, subject="user-1"):
+        from tpihunter.audience import Acceptance, NEVER_ISSUED, Presentation
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401")
+            outcome = table.get(aud.id, Acceptance.REFUSED)
+            if outcome is Acceptance.ACCEPTED:
+                return Presentation(outcome, subject, "200")
+            return Presentation(outcome, None, "401")
+        return present
+
+    def test_cross_audience_acceptance_is_a_tpi2_finding(self):
+        from tpihunter.audience import Acceptance, run_audience_matrix
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                self._present({"clientA": Acceptance.ACCEPTED,
+                                               "clientB": Acceptance.ACCEPTED}),
+                                check_tamper=False)
+        tpi2 = [f for f in r.findings if f.clause_id == "TPI-2"]
+        self.assertEqual(len(tpi2), 1)
+        self.assertIn("clientB", tpi2[0].detail)
+
+    def test_acceptance_only_at_its_own_audience_is_correct_behaviour(self):
+        from tpihunter.audience import Acceptance, run_audience_matrix
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                self._present({"clientA": Acceptance.ACCEPTED}),
+                                check_tamper=False)
+        self.assertEqual(r.findings, [])
+        self.assertIn("no finding", r.render())
+
+    def test_a_token_refused_at_its_own_audience_yields_no_verdict(self):
+        """The control that fired on the live run: an expired or wrong-typed token is
+        refused everywhere, which looks like perfect pinning and proves nothing."""
+        from tpihunter.audience import Acceptance, run_audience_matrix
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                self._present({}), check_tamper=False)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("not accepted at its own audience" in w for w in r.withheld))
+
+    def test_two_hundred_without_a_subject_is_not_acceptance(self):
+        """An anonymous page returns 200 too. Without a witness naming the principal, the
+        easiest false critical in this mode is an unauthenticated marketing response."""
+        from tpihunter.audience import Acceptance, Presentation, NEVER_ISSUED, run_audience_matrix
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401")
+            if aud.id == "clientA":
+                return Presentation(Acceptance.ACCEPTED, "user-1", "200")
+            return Presentation(Acceptance.ACCEPTED, None, "200 anonymous")
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                present, check_tamper=False)
+        self.assertEqual(r.findings, [])
+        cell = [c for c in r.cells if c.audience.id == "clientB"][0]
+        self.assertIs(cell.acceptance, Acceptance.INCONCLUSIVE)
+
+    def test_an_audience_that_accepts_anything_is_reported_not_believed(self):
+        from tpihunter.audience import Acceptance, NEVER_ISSUED, Presentation, run_audience_matrix
+        def present(tok, aud):
+            return Presentation(Acceptance.ACCEPTED, "user-1", "200 always")
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                present, check_tamper=False)
+        self.assertTrue(any(f.clause_id == "AUDIENCE-0" for f in r.findings))
+        self.assertFalse(any(f.clause_id == "TPI-2" for f in r.findings))
+
+    def test_a_tampered_signature_that_is_accepted_outranks_the_aud_question(self):
+        from tpihunter.audience import Acceptance, NEVER_ISSUED, Presentation, run_audience_matrix
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401")
+            if aud.id != "clientA":
+                return Presentation(Acceptance.REFUSED, None, "401")
+            return Presentation(Acceptance.ACCEPTED, "user-1", "200")
+        r = run_audience_matrix([self._t()], self._auds("clientA"), present)
+        self.assertTrue(any(f.clause_id == "AUDIENCE-1" for f in r.findings))
+
+    def test_tamper_changes_only_the_signature(self):
+        from tpihunter.audience import tamper
+        t = "aaa.bbb.ccc"
+        out = tamper(t)
+        self.assertEqual(out.split(".")[:2], ["aaa", "bbb"])
+        self.assertNotEqual(out.split(".")[2], "ccc")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -13,6 +13,7 @@ The pieces:
   probes       hand-written TPI probe plans
   browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
   stepup_matrix  step-up across live flows (TPI-6): equal-privilege flows that disagree
+  audience     the audience matrix (TPI-2): a token presented where it was not minted for
   sessions     sessions as scarce inventory — reuse before you spend, and a login budget
   surface      surface triage — which in-scope asset to point the modes at, and why
   credentials  credential structure/entropy — the handle TPI treats as an atom
@@ -46,6 +47,8 @@ from .identifiers import Variant, probe_identifier, variants
 from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
 from .credentials import CredentialSample, Shape, analyse, decode_jwt
 from .sessions import LoginLedger, NoSessionAvailable, Session, SessionStore
+from .audience import (Acceptance, Audience, AudienceResult, Presentation, Token,
+                       run_audience_matrix, tamper)
 from .stepup_matrix import (Asymmetry, Cell, Kind, Level, Reading, StepUpResult, Transition,
                      nintendo_account_transitions, run_stepup)
 from .surface import Baseline, Surface, catchall_baseline, render_table, triage
@@ -89,6 +92,8 @@ __all__ = [
     "Surface", "Baseline", "triage", "catchall_baseline", "render_table",
     "SessionStore", "Session", "LoginLedger", "NoSessionAvailable",
     "run_stepup", "Transition", "Reading", "Level", "Kind", "Asymmetry", "StepUpResult",
+    "run_audience_matrix", "Audience", "Token", "Presentation", "Acceptance",
+    "AudienceResult", "tamper",
     "nintendo_account_transitions",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",

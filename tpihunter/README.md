@@ -178,6 +178,43 @@ developer portal returned a **byte-identical 11,998-byte page** for `/`, `/welco
 `/j_spring_security_logout` *and* a nonsense path — three "reachable without auth" results,
 all artefacts.
 
+## The audience matrix (the seventh mode)
+
+Every mode before this one stayed inside one host. An account takeover rarely does: the
+account lives at an identity provider, and the damage happens at the relying parties that
+trust its tokens. That surface asks TPI-2 in its purest form — **a token minted to prove
+control of X, presented to resource server Y: does Y take it?**
+
+```python
+res = run_audience_matrix(tokens, audiences, present)
+```
+
+Cells are token × audience. The controls are the whole value, because "HTTP 200" is not
+acceptance and "HTTP 403" is not refusal:
+
+* **Subject witness.** An audience counts as accepting a token only if it echoes *which
+  principal* it resolved. A 200 carrying an anonymous page is not acceptance — that is the
+  easiest false critical in this mode. The witness is also what makes a cross-audience
+  acceptance exploitable rather than merely interesting: it names whose account you got.
+* **Never-issued, per audience.** A well-formed but never-issued token must be refused
+  there, or "it accepted my token" is unfalsifiable.
+* **Positive control.** The token must be accepted at its *own* audience. A token refused
+  everywhere looks like perfect pinning and proves nothing — it may just be expired.
+* **Tamper.** A copy with one byte flipped in the signature must be refused. An audience
+  that takes it is not checking signatures at all, reported as `AUDIENCE-1` rather than
+  folded into an aud finding, because it subsumes the question.
+
+Run live against Nintendo's federation surface, the controls are what produced the result.
+An idToken (`aud=e56201e414c97a10`, `sub` = the account, 900s life) was presented to the
+shop GraphQL: the genuine token reached the shop module (`SHOGUN 404` — that account has
+no shop account), while a flipped signature, a never-issued token and a swapped `sub` all
+returned `400/9710`. Signature verification is sound there, and the endpoint is now
+*calibrated*: a future acceptance would mean something.
+
+The positive control is what stops the mode lying. On the first live run the token was
+refused at every audience including its own, and the matrix returned no verdict rather
+than reporting perfect pinning.
+
 ## The step-up matrix (the sixth mode)
 
 > Sibling to `stepup.py` (M17), which models TPI-6 *inside the state machine* — partial
@@ -397,6 +434,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `browser.py` | **a UI flow as an ordinary adapter** — `BrowserAdapter`, `Flow`, `UiStep`, `Expect`. The browser is injected as a `PageDriver`, so the logic is tested without one |
 | `sessions.py` | **sessions as scarce inventory** — `SessionStore` reuses a live session before minting one, `LoginLedger` caps the spend and refuses after repeated failures |
 | `stepup_matrix.py` | **the step-up matrix (TPI-6, live)** — which privileged transitions demand re-authentication, and which equally-privileged sibling does not. Sibling to `stepup.py`, which models the same clause in the state machine |
+| `audience.py` | **the audience matrix (TPI-2)** — a token presented to a resource server it was not minted for; subject-witness, never-issued, positive and tamper controls |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
