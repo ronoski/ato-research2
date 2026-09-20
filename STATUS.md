@@ -43,6 +43,8 @@ server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`
 | report | `report` — evidence bundle per distinct bug (markdown/JSON) | ✅ done (M7) |
 | **revocation** | `matrix` — mutation × binding-kind × plane lifecycle mode (own-account) | ✅ done (M12; +cross-plane, +factor/lifecycle kinds) |
 | **robustness** | oracle confirmation — a verdict must reproduce before it fires | ✅ done (M13) |
+| **sessions** | `sessions` — a session is scarce inventory: reuse before minting, budget the spend | ✅ done (M33) |
+| **step-up** | `stepup_matrix` — TPI-6 across live flows: equal-privilege transitions that disagree | ✅ done (M34) |
 | **synthesis** | richer params — synthesized actions take codes/tokens/second identifiers | ✅ done (M14) |
 
 ---
