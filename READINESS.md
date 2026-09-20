@@ -31,7 +31,7 @@ is gated on the owner and **cannot be shortcut on the mock**.
 | # | rung | status |
 |---|------|--------|
 | 1 | Theory + a self-validating reference implementation | ✅ **here** (M0–M3, M5, M7–M15) |
-| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ⚠️ **M4 is now built** (2026-09-20) and validated against a loopback HTTP target; the rung still needs a real authorized one |
+| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ⚠️ **partly met (2026-09-20)** — see *Where rung 2 actually stands* below. Two independent lines of work landed: a live GrabID adapter that reproduced a known finding by hand (M18), and a generic profile-driven live path validated on loopback (M20) |
 | 3 | A **real** LLM strategist drives a live run, adapts, and knows when to stop | ❌ never run |
 | 4 | Finds a bug that **wasn't planted**, on a system it didn't build | ❌ the real bar |
 
@@ -42,11 +42,20 @@ Rungs 2–4 *are* the "AI hunter" claim. None is reachable on the mock.
 ## What IS done — do not redo it
 
 - The full loop, self-validating on the mock: **123 tests, 13 demos green**, stdlib-only core.
-- **The live path (M4).** A target is described as data (`profile.py`), driven over HTTP by
-  `live.py` with scope enforced per request, and the description must pass
+- **The session-trust lattice** is real (M17): partial sessions, step-up, and **TPI-6**
+  (`step-up-not-bypassable`).
+- **A live target adapter for GrabID** (M18): hand-written, structurally safe (a BARRED
+  set refusing destructive endpoints before a request is built; no code/PIN/token
+  generated in-process), and it reproduced a known structural finding on the authorized
+  target by hand.
+- **The generic live path** (M20). A target is described as data (`profile.py`), driven
+  over HTTP by `live.py` with scope enforced per request, and the description must pass
   `validate.py`'s checks before any verdict from it counts. `http_mock.py` runs the same
   vulnerable target behind a real socket, and the live path finds the **same TPI-1 and
   TPI-4 with the same minimal repros** — with nobody writing an adapter.
+- **Safety hardening** (M19): the oracle's positive/negative/bystander controls and
+  attribution guards, `AUTHZ-1` for access that is not provenance-specific, and
+  `policy.py` — rules of engagement enforced per action with an audit trail.
 - Two judgment modes: the two-principal confluence **oracle** and the single-principal
   **revocation matrix**.
 - Automated abstraction: **L\*** learns the auth FSM, the **W-method** oracle (M15) certifies it
@@ -232,6 +241,40 @@ That is the point, and it is why the scope checks, the budget, the rate limit, t
 and the audit trail are enforced in the transport rather than left to the caller.
 
 ---
+
+---
+
+## Where rung 2 actually stands (2026-09-20)
+
+Two shifts reached for the same rung from opposite ends, and neither closes it alone.
+Recording it plainly so the next shift does not assume more than is true.
+
+| | M18 — GrabID adapter | M20 — generic live path |
+|---|---|---|
+| target | a **real, authorized** one | a loopback server this repo wrote |
+| adapter | hand-written Python, target-specific | a `TargetProfile`, authored as data |
+| what it showed | reproduced a **known structural finding** (`probe_structure` recovered the same struct found by hand) | found the **same TPI-1 / TPI-4** as the in-process path, through sockets |
+| what it did not show | a TPI **verdict** on a live target — the finding reproduced is structural recon, not an oracle verdict | anything at all about a real system |
+
+⇒ Rung 2 as written ("reproduces a *known* finding") is **met on the structural half by
+M18**. What is still unmet: **the oracle has never rendered a verdict against a real
+target.** That is the thing the whole framework exists to do, and it remains the gate.
+
+Three questions this hands to the owner, none of which a session should settle alone:
+
+1. **Should GrabID be re-expressed as a `TargetProfile`?** M20's position (in the tool
+   README) is that a hand-written adapter stays the right answer for a target a profile
+   cannot describe — and GrabID, with request signing and an out-of-band OTP relay, is
+   plausibly exactly that target. But two live paths is a maintenance surface, and only
+   one of them is exercised by the suite.
+2. **`targets/grabid.py` does not go through `policy.guard()`.** It has its own BARRED
+   set, which is good and is structural. It does not have the identifier/host allowlist,
+   the request budget, the rate limit, or the audit trail. On a real target those are the
+   controls that make a run accountable afterwards. Wiring it through `policy.py` looks
+   cheap and is probably right.
+3. **The oracle on a live target is the untested step.** M18 exercised recon; M19 hardened
+   the verdict; nobody has run the two together against anything real. Gap 2's real test —
+   watching the oracle for a false positive on a shared/tenant account — is still pending.
 
 ## The decision this hands to the owner
 
