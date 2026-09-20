@@ -290,6 +290,43 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## 2FA enrolment: the strongest gate on the surface
+
+The lockout question — can an intruder holding only a session add a second factor the
+owner does not have, and strand them? Measured on a clean, freshly-registered account
+whose session was seconds old:
+
+```
+/2fa/authenticator          click "2-Step Verification setup"
+   -> /reauthenticate        "Re-enter Password"           (password demanded)
+   -> /reauthenticate/email  "you must verify your e-mail" (emailed code demanded)
+   -> /2fa/authenticator/enable   enrolment, shared secret shown
+```
+
+Enrolling a second factor requires the session **plus the password plus a code mailed to
+the bound address** — two independent proofs beyond the cookie. A stolen session cannot do
+it, so the lockout scenario does not arise. This is the strongest gate measured anywhere on
+this target.
+
+Set against the other transitions, the asymmetry is the interesting part:
+
+| transition | proof demanded beyond a live session |
+|---|---|
+| enrol 2FA | password **and** emailed code |
+| change password | step-up |
+| rebind e-mail | none, inside the freshness window |
+| **enrol passkey** | **none, inside the freshness window** |
+
+The cheapest credential to mint is the one that grants *durable, password-free* access.
+Enrolling a passkey needs strictly less proof than enrolling a second factor, while
+outliving a password change. Neither is a finding on its own — the owner can see and delete
+a passkey, and the sign-in page offers "Sign In Another Way" — but a report should name the
+inconsistency, because the ranking is backwards from the risk.
+
+Backup-code issuance was not verified: the enrolment page reached is "Step 1: install the
+app", and codes appear after a TOTP challenge. Recorded as unverified rather than guessed,
+though it cannot change the conclusion — the gate that would make it matter already holds.
+
 ## A passkey also survives — and that one is NOT a finding
 
 The same test applied to a passkey gives a louder-looking result and a weaker one, and
