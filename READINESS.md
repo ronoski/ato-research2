@@ -31,7 +31,7 @@ is gated on the owner and **cannot be shortcut on the mock**.
 | # | rung | status |
 |---|------|--------|
 | 1 | Theory + a self-validating reference implementation | ✅ **here** (M0–M3, M5, M7–M15) |
-| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ⚠️ **partly met (2026-09-20)** — see *Where rung 2 actually stands* below. Two independent lines of work landed: a live GrabID adapter that reproduced a known finding by hand (M18), and a generic profile-driven live path validated on loopback (M20) |
+| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ⚠️ **largely met (2026-09-20)** — the oracle has now rendered controlled verdicts against a real authorized target (Nintendo `accounts.nintendo.com` / `api.accounts.nintendo.com`), including independently reproducing that estate's earlier hand-measured account-plane result. See *Where rung 2 actually stands* |
 | 3 | A **real** LLM strategist drives a live run, adapts, and knows when to stop | ❌ never run |
 | 4 | Finds a bug that **wasn't planted**, on a system it didn't build | ❌ the real bar |
 
@@ -256,9 +256,38 @@ Recording it plainly so the next shift does not assume more than is true.
 | what it showed | reproduced a **known structural finding** (`probe_structure` recovered the same struct found by hand) | found the **same TPI-1 / TPI-4** as the in-process path, through sockets |
 | what it did not show | a TPI **verdict** on a live target — the finding reproduced is structural recon, not an oracle verdict | anything at all about a real system |
 
-⇒ Rung 2 as written ("reproduces a *known* finding") is **met on the structural half by
-M18**. What is still unmet: **the oracle has never rendered a verdict against a real
-target.** That is the thing the whole framework exists to do, and it remains the gate.
+⇒ Rung 2 as written is **met**. M18 met the structural half. On 2026-09-20 the oracle
+itself rendered controlled verdicts against a live authorized target:
+
+| question (accounts.nintendo.com unless noted) | verdict | controls |
+|---|---|---|
+| two independent sessions — cross-principal access | SAFE | natural canary 53.2 bits, stable, ref reads scoped |
+| `logout` revokes the session | REVOKED (403) | browser logged out |
+| "Sign out on all other devices" revokes a predating session | REVOKED (403) | device list 9 → 2 |
+| password change revokes a predating session | REVOKED (403) | old password rejected |
+| enabling 2SV revokes a predating session | SURVIVED | 2SV shows Enabled — expected hardening, not a finding |
+| password change revokes an enrolled passkey | SURVIVED | old password rejected — standard WebAuthn, see the matrix note |
+| unaccepted family invite creates a binding / discloses data | no | invite delivered, group still empty |
+| `api.accounts.../users/{sub}/point_wallet` cross-account read | GATED (403) | own=200, never-valid sub=403 |
+| `.../mission_statuses` cross-account read | INCONCLUSIVE | positive control failed — token lacks the scope |
+
+**No vulnerability was found.** That is the honest result, and the controls are what make
+it worth anything: the `mission_statuses` cell would have read as "gated" on the
+cross-account 403 alone, and the framework refused it because the positive control failed.
+The `point_wallet` result independently reproduces the account-plane measurement that
+estate had made by hand on 2026-09-05.
+
+What live contact cost the framework, and is now fixed: a missing mutation control in
+`matrix.run_cell` (M25 — a `/logout` confirmation page made a cell read SURVIVED on a
+mutation that never happened), a 64 KiB regex-scan window that silently truncated a real
+page (M25), and an over-strong `password_reset x factor` obligation that would fire on
+every passkey-supporting target (caveated).
+
+⚠️ **Scope caveat on `api.accounts.nintendo.com`:** that host is NOT in the programme's
+published scope export of 2026-09-20 04:20 UTC, is absent from `program.json`, and the
+estate's own `tools/scope.py` returns UNKNOWN for it. It was tested on the researcher's
+explicit instruction and recorded as researcher-asserted, not programme-confirmed. Any
+finding filed against it must disclose that.
 
 Three questions this hands to the owner, none of which a session should settle alone:
 
