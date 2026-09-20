@@ -178,6 +178,42 @@ developer portal returned a **byte-identical 11,998-byte page** for `/`, `/welco
 `/j_spring_security_logout` *and* a nonsense path — three "reachable without auth" results,
 all artefacts.
 
+## The scope matrix (the eighth mode)
+
+A token carries the scopes its user consented to. If a resource serves data the token was
+never granted, consent is decorative — a client approved for `openid` alone reads the
+birthday, the wallet, the wishlist. That is TPI-6 one layer down: a scope *is* a
+provenance level, and a resource must not accept one below what it demands.
+
+What makes the mode work is the **field witness**, and it is not a detail — it is the
+whole mode:
+
+> "served" means the specific field this scope governs came back. **Not** HTTP 200, and
+> **not** "the account id appeared somewhere in the response".
+
+Both weaker predicates were tried against the live surface and both accused an API that
+enforces scopes correctly:
+
+* `openid` legitimately grants the subject identifier, so an id in the body means only
+  that the token worked at all. `/2.0.0/users/me` returns `{"id": ...}` for `openid`, and
+  progressively more fields as scopes widen — that is field-level filtering working.
+* an error body commonly echoes the request URL, and on this surface that URL *contains*
+  the account id — so a `403` **refusing** the request scored as a disclosure.
+
+So a `Resource` names the field whose disclosure requires the scope, and a cell counts as
+served only when that field is present. Measured live:
+
+```
+scope set     resource        result     evidence
+full          point_wallet    served     200 {"userId":...,"total":0}
+openid-only   point_wallet    refused    403 insufficient_scope
+openid+user   point_wallet    refused    403
+never-valid   point_wallet    refused    401 invalid_token
+```
+
+Scope enforcement is sound. The positive control (full scope obtains the field) and the
+negative (a never-valid bearer is refused) both fire, so the refusals mean something.
+
 ## The audience matrix (the seventh mode)
 
 Every mode before this one stayed inside one host. An account takeover rarely does: the
@@ -455,6 +491,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `sessions.py` | **sessions as scarce inventory** — `SessionStore` reuses a live session before minting one, `LoginLedger` caps the spend and refuses after repeated failures |
 | `stepup_matrix.py` | **the step-up matrix (TPI-6, live)** — which privileged transitions demand re-authentication, and which equally-privileged sibling does not. Sibling to `stepup.py`, which models the same clause in the state machine |
 | `audience.py` | **the audience matrix (TPI-2)** — a token presented to a resource server it was not minted for; subject-witness, never-issued, positive and tamper controls |
+| `scopes.py` | **the scope matrix (TPI-6 at the token layer)** — consent as a provenance level; judged on a field witness, not on HTTP 200 |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |

@@ -3107,5 +3107,75 @@ class TestAudienceMatrix(unittest.TestCase):
         self.assertNotEqual(out.split(".")[2], "ccc")
 
 
+class TestScopeMatrix(unittest.TestCase):
+    """Consent as a provenance level. The field witness is the whole mode: two weaker
+    predicates were tried live and both accused a surface that enforces scopes correctly."""
+
+    def _setup(self):
+        from tpihunter.scopes import Resource, ScopeSet
+        full = ScopeSet.of("full", "openid user pointWallet")
+        thin = ScopeSet.of("openid-only", "openid")
+        bad  = ScopeSet.of("never-valid", "")
+        wallet = Resource("point_wallet", "pointWallet", "total")
+        return full, thin, bad, wallet
+
+    def _fetch(self, table):
+        from tpihunter.scopes import Served
+        class R:
+            def __init__(self, served, evidence=""):
+                self.served, self.evidence = served, evidence
+        def fetch(ss, r):
+            return R(table.get((ss.id, r.id), Served.REFUSED), "x")
+        return fetch
+
+    def test_a_scope_it_was_not_granted_is_a_tpi6_finding(self):
+        from tpihunter.scopes import Served, run_scope_matrix
+        full, thin, bad, wallet = self._setup()
+        r = run_scope_matrix([full, thin], [wallet], self._fetch({
+            ("full","point_wallet"): Served.SERVED,
+            ("openid-only","point_wallet"): Served.SERVED}), full=full, never_valid=bad)
+        self.assertEqual(len([f for f in r.findings if f.clause_id=="TPI-6"]), 1)
+
+    def test_a_refusal_for_the_narrow_scope_is_correct_behaviour(self):
+        """What the live surface actually did: 403 insufficient_scope."""
+        from tpihunter.scopes import Served, run_scope_matrix
+        full, thin, bad, wallet = self._setup()
+        r = run_scope_matrix([full, thin], [wallet], self._fetch({
+            ("full","point_wallet"): Served.SERVED,
+            ("openid-only","point_wallet"): Served.REFUSED}), full=full, never_valid=bad)
+        self.assertEqual(r.findings, [])
+        self.assertIn("no finding", r.render())
+
+    def test_a_resource_the_full_token_cannot_reach_is_excluded(self):
+        """A 404 would otherwise read as perfect enforcement."""
+        from tpihunter.scopes import Served, run_scope_matrix
+        full, thin, bad, wallet = self._setup()
+        r = run_scope_matrix([full, thin], [wallet], self._fetch({
+            ("full","point_wallet"): Served.INCONCLUSIVE,
+            ("openid-only","point_wallet"): Served.SERVED}), full=full, never_valid=bad)
+        self.assertEqual([f for f in r.findings if f.clause_id=="TPI-6"], [])
+        self.assertTrue(any("did not obtain" in w for w in r.withheld))
+
+    def test_an_endpoint_serving_a_never_valid_credential_subsumes_the_scope_question(self):
+        from tpihunter.scopes import Served, run_scope_matrix
+        full, thin, bad, wallet = self._setup()
+        r = run_scope_matrix([full, thin], [wallet], self._fetch({
+            ("full","point_wallet"): Served.SERVED,
+            ("never-valid","point_wallet"): Served.SERVED,
+            ("openid-only","point_wallet"): Served.SERVED}), full=full, never_valid=bad)
+        self.assertTrue(any(f.clause_id=="SCOPE-0" for f in r.findings))
+        self.assertEqual([f for f in r.findings if f.clause_id=="TPI-6"], [])
+
+    def test_absent_field_is_not_a_disclosure(self):
+        """users/me returns progressively more fields as scopes grow; the narrow token
+        getting a 200 with the governed field withheld is enforcement, not a leak."""
+        from tpihunter.scopes import Served, run_scope_matrix
+        full, thin, bad, wallet = self._setup()
+        r = run_scope_matrix([full, thin], [wallet], self._fetch({
+            ("full","point_wallet"): Served.SERVED,
+            ("openid-only","point_wallet"): Served.ABSENT}), full=full, never_valid=bad)
+        self.assertEqual(r.findings, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
