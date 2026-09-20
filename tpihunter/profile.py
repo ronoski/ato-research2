@@ -60,7 +60,6 @@ _PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 _FORBIDDEN_HEADERS = frozenset({"host", "content-length", "transfer-encoding"})
 _MAX_REGEX = 200
-_REGEX_WINDOW = 65_536      # how much of a response body an extractor regex may scan
 
 
 class ProfileError(ValueError):
@@ -86,9 +85,14 @@ class Extract:
         if self.kind == "cookie":
             return response.cookies.get(self.spec)
         if self.kind == "regex":
-            # Bounded slice: the regex comes from the profile and the text from the target,
-            # and Python cannot time a match out. A reset link is never 64 KiB in.
-            m = re.search(self.spec, response.text[:_REGEX_WINDOW])
+            # Scans the whole response, which the transport has ALREADY bounded by the
+            # profile's max_bytes. An earlier version cut the scan at 64 KiB as a crude
+            # ReDoS guard, and on a real target the value it was looking for sat at offset
+            # 69,800 of a 74 KiB page: the extractor returned nothing, the oracle correctly
+            # refused to render a verdict, and the cause was this guard rather than the
+            # target. Response size is the right place to bound this; truncating the scan
+            # silently changes what the profile means.
+            m = re.search(self.spec, response.text)
             return (m.group(1) if m.groups() else m.group(0)) if m else None
         if self.kind == "json":
             return _dig(response.json(), self.spec)

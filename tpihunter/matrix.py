@@ -73,6 +73,10 @@ class MutationSpec:
     steps: tuple
     label: str = ""
     revokes_kinds: frozenset = frozenset({"session"})
+    # OPTIONAL mutation control: verify(adapter, principal) -> True (it took effect),
+    # False (it did not), None (cannot tell). Without it a cell can only check that the
+    # mutation's steps reported success, which is not the same thing — see run_cell.
+    verify: Optional[object] = None
 
 
 @dataclass
@@ -87,6 +91,7 @@ class CellVerdict:
     per_plane: dict = field(default_factory=dict)   # plane -> Survival (REVOKED/SURVIVED)
     expected_revoke: bool = True                    # was the mutation obliged to revoke this kind?
     binding_kind: str = "session"                   # "session" | "factor"
+    mutation_verified: str = "not measured"         # did the mutation demonstrably happen?
 
     @property
     def is_finding(self) -> bool:
@@ -115,7 +120,9 @@ def default_mutations(email: str) -> list[MutationSpec]:
     binding kinds it is obliged to revoke."""
     return [
         MutationSpec("logout", (("logout", {}),), "logout",
-                     revokes_kinds=frozenset({"session"})),
+                     revokes_kinds=frozenset({"session"}),
+                     # the acting context must itself stop authenticating
+                     verify=lambda a, p: not a.whoami(p).ok),
         MutationSpec("password_reset",
                      (("reset_request", {"email": email}),
                       ("reset_consume", {"email": email, "new_password": password("owner:reset")})),
@@ -161,9 +168,31 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
         return inconclusive("no plane had both a firing positive control and a rejecting "
                             "negative control — cannot read a survival")
 
-    # 4. perform the mutation as the account owner
-    for action, params in mutation.steps:
-        execute_action(a, principal, action, params)
+    # 4. perform the mutation as the account owner — and CHECK IT HAPPENED.
+    #
+    # This is the control the cell was missing, and a live run is what exposed it: a real
+    # target's /logout is a CONFIRMATION page, so navigating to it returns HTTP 200 and
+    # logs nobody out. The binding then "survives" a mutation that never occurred, and
+    # every cell reads SURVIVED — a false Critical, produced by a measurement that never
+    # ran. A cell may only report on a mutation it can show took effect.
+    outs = [execute_action(a, principal, action, params) for action, params in mutation.steps]
+    failed = [o for o in outs if o is not None and not getattr(o, "ok", True)]
+    if failed:
+        return inconclusive(
+            f"the mutation '{mutation.id}' did not execute ("
+            + "; ".join((o.note or "step failed")[:80] for o in failed) + ")")
+    verified = None
+    if mutation.verify is not None:
+        try:
+            verified = mutation.verify(a, principal)
+        except Exception as e:                      # a broken verifier is not a finding
+            return inconclusive(f"the mutation control for '{mutation.id}' raised "
+                                f"{type(e).__name__}; the cell measured nothing")
+        if verified is False:
+            return inconclusive(
+                f"'{mutation.id}' reported success but did not take effect — the cell "
+                f"cannot distinguish a surviving binding from a mutation that never "
+                f"happened")
 
     # 5. re-present the captured binding on each readable plane
     per_plane = {p: (Survival.SURVIVED if a.present_binding(handle, p).ok else Survival.REVOKED)
@@ -174,28 +203,34 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
     def names(ps):
         return ", ".join(str(p) for p in ps)
 
+    def tag(v: CellVerdict) -> CellVerdict:
+        v.mutation_verified = ("verified" if verified is True else
+                               "unverified — steps succeeded but the mutation's effect "
+                               "was not independently confirmed")
+        return v
+
     if survived and revoked:
         ev = [f"binding minted by '{mint.id}' was REVOKED on plane(s) [{names(revoked)}] "
               f"but SURVIVED on [{names(survived)}] after '{mutation.id}'",
               "the mutation's revocation is plane-local — a same-plane test would call this fixed",
               "per-plane positive and negative controls held on every plane read"]
-        return CellVerdict(mint.id, mutation.id, Survival.SPLIT, 0.95, "TPI-4", ev,
+        return tag(CellVerdict(mint.id, mutation.id, Survival.SPLIT, 0.95, "TPI-4", ev,
                            note=f"'{mutation.label or mutation.id}' revoked the "
                                 f"'{mint.label or mint.id}' binding on [{names(revoked)}] but not "
                                 f"[{names(survived)}] — plane-local revocation",
-                           per_plane=per_plane, binding_kind=mint.kind)
+                           per_plane=per_plane, binding_kind=mint.kind))
     if survived:
         ev = [f"binding minted by '{mint.id}' still authenticates after '{mutation.id}' "
               f"on plane(s) [{names(survived)}]",
               "per-plane positive control fired and the negative control was rejected"]
-        return CellVerdict(mint.id, mutation.id, Survival.SURVIVED, 0.95, "TPI-4", ev,
+        return tag(CellVerdict(mint.id, mutation.id, Survival.SURVIVED, 0.95, "TPI-4", ev,
                            note=f"'{mutation.label or mutation.id}' did not revoke the "
                                 f"'{mint.label or mint.id}' binding",
-                           per_plane=per_plane, binding_kind=mint.kind)
-    return CellVerdict(mint.id, mutation.id, Survival.REVOKED, 0.95, None,
+                           per_plane=per_plane, binding_kind=mint.kind))
+    return tag(CellVerdict(mint.id, mutation.id, Survival.REVOKED, 0.95, None,
                        note=f"'{mutation.label or mutation.id}' revoked the "
                             f"'{mint.label or mint.id}' binding",
-                       per_plane=per_plane, binding_kind=mint.kind)
+                       per_plane=per_plane, binding_kind=mint.kind))
 
 
 @dataclass

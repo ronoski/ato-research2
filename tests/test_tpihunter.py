@@ -1410,6 +1410,15 @@ class TestTargetProfile(unittest.TestCase):
         self.assertNotIn("admin", json.loads(json.dumps(body)))   # still two fields
         self.assertEqual(set(body), {"email", "note"})
 
+    def test_a_regex_extractor_scans_the_whole_response(self):
+        # Caught live: the value sat at offset 69,800 of a 74 KiB page and a 64 KiB scan
+        # window silently returned nothing, which reads as "the field is empty".
+        from tpihunter.live import Response
+        from tpihunter.profile import Extract
+        body = ("x" * 69_800) + 'obfuscatedId&quot;:&quot;d0f0e3efa65ac9fa&quot;' + ("y" * 4_000)
+        ex = Extract("regex", r"obfuscatedId&quot;:&quot;([0-9a-f]{16})")
+        self.assertEqual(ex.apply(Response(200, {}, {}, body)), "d0f0e3efa65ac9fa")
+
     def test_unsettable_headers_and_bad_regexes_are_refused(self):
         from tpihunter.profile import ProfileError, TargetProfile
         from tpihunter.http_mock import profile_for
@@ -1983,6 +1992,71 @@ class TestSuppliedSessions(unittest.TestCase):
         self.assertEqual(by["session:victim"].status, "fail")
         self.assertIn("does not resolve to an identity", by["session:victim"].detail)
         self.assertFalse(v.ready)
+
+
+class TestMutationControl(unittest.TestCase):
+    """A cell may only report on a mutation it can show took effect.
+
+    Found live, not by reasoning: a real target's /logout is a CONFIRMATION page. Fetching
+    it returns HTTP 200 and logs nobody out. The captured session then "survives" a
+    mutation that never happened, and every cell reads SURVIVED — a false Critical
+    produced by a measurement that never ran. (The same target, once the button was
+    actually clicked, revoked the session correctly: 403.)"""
+
+    from tpihunter.matrix import MintSpec, MutationSpec
+    MINT = MintSpec("password_session", (("register", {"email": EMAIL, "password": "Pw!1"}),),
+                    "a password session")
+
+    def _cell(self, mutation, **adapter_kw):
+        from tpihunter.matrix import run_cell
+        owner = Principal("owner")
+        return run_cell(lambda: MockAdapter(control={owner.name: {EMAIL}}, **adapter_kw),
+                        self.MINT, mutation, owner)
+
+    def test_a_mutation_that_silently_does_nothing_is_inconclusive_not_survived(self):
+        from tpihunter.matrix import MutationSpec, Survival
+        noop = MutationSpec("confirmation_page", (("noop_logout", {}),), "a logout that asks",
+                            verify=lambda a, p: not a.whoami(p).ok)
+
+        class ConfirmationPage(MockAdapter):
+            """Reports success and changes nothing — the live shape."""
+            def noop_logout(self, p):
+                from tpihunter.types import Observation
+                return Observation(True, note="signed-out confirmation page rendered")
+
+        v = self._cell(noop, **{})
+        # the adapter above is supplied through the factory, so build it explicitly:
+        from tpihunter.matrix import run_cell
+        owner = Principal("owner")
+        v = run_cell(lambda: ConfirmationPage(control={owner.name: {EMAIL}}),
+                     self.MINT, noop, owner)
+        self.assertEqual(v.survival, Survival.INCONCLUSIVE)
+        self.assertIn("did not take effect", v.note)
+        self.assertFalse(v.is_finding)
+
+    def test_a_mutation_whose_steps_fail_is_inconclusive(self):
+        from tpihunter.matrix import MutationSpec, Survival
+        missing = MutationSpec("absent", (("no_such_verb", {}),), "a verb the target lacks")
+        v = self._cell(missing)
+        self.assertEqual(v.survival, Survival.INCONCLUSIVE)
+        self.assertIn("did not execute", v.note)
+
+    def test_a_verified_mutation_still_reports_normally(self):
+        from tpihunter.matrix import Survival, default_mutations
+        logout = next(m for m in default_mutations(EMAIL) if m.id == "logout")
+        survived = self._cell(logout)                       # logout does not revoke by default
+        self.assertEqual(survived.survival, Survival.SURVIVED)
+        self.assertEqual(survived.mutation_verified, "verified")
+        revoked = self._cell(logout, revokes={"logout"})
+        self.assertEqual(revoked.survival, Survival.REVOKED)
+        self.assertEqual(revoked.mutation_verified, "verified")
+
+    def test_a_cell_without_a_verifier_says_so_rather_than_implying_one(self):
+        from tpihunter.matrix import MutationSpec, Survival
+        unverified = MutationSpec("logout", (("logout", {}),), "logout")   # no verify=
+        v = self._cell(unverified)
+        self.assertEqual(v.survival, Survival.SURVIVED)
+        self.assertIn("unverified", v.mutation_verified)
 
 
 if __name__ == "__main__":
