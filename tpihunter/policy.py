@@ -53,7 +53,8 @@ import inspect
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from posixpath import normpath
+from urllib.parse import unquote, urlsplit
 
 from .redact import redact
 from .types import Observation, Principal
@@ -84,16 +85,34 @@ class EngagementPolicy:
     """The rules of one engagement, as data.
 
     `identifiers` is the whole allowlist of accounts the tool may act on — the test
-    accounts you created for this engagement, and nothing else. `hosts` is the
-    equivalent for network destinations. Both are exact matches; `hosts` additionally
-    admits subdomains of a listed host, which is how in-scope estates are usually
-    written, and never a suffix match on a bare string (so `acme.example` in scope does
-    not put `notacme.example` in scope).
+    accounts you created for this engagement, and nothing else.
+
+    `hosts` and `excluded` describe network scope, and they are matched the way a real
+    programme's scope is actually written — as URLs, not hostnames. Each entry is
+
+        "example.com"              exactly that host, at any path
+        "*.example.com"            its subdomains, NOT the apex (the narrow reading)
+        "example.com/app/"         that host, only under that path prefix
+        "*.example.com/app/"       both together
+
+    and `excluded` entries take the same forms and always beat `hosts`. All three rules
+    were learned from a real programme's structured scopes rather than guessed:
+
+      * exact entries must not admit subdomains — `accounts.nintendo.com` is in scope
+        there and `api.accounts.nintendo.com` is not;
+      * a host listed under a path prefix is in scope only under that prefix — four
+        such hosts are in that programme;
+      * exclusions can be path-scoped on an otherwise in-scope host, so a host-level
+        gate probes an explicitly excluded asset.
+
+    `check_url` is the real gate. `check_host` answers only the coarse question "could
+    this host ever be in scope", which is necessary but NOT sufficient.
     """
     name: str
     authorized_by: str = ""                      # who authorized this, and where it is recorded
     identifiers: frozenset = frozenset()         # account identifiers in scope
-    hosts: frozenset = frozenset()               # hostnames in scope (for an HTTP adapter)
+    hosts: frozenset = frozenset()               # in-scope entries (see the matching rules below)
+    excluded: frozenset = frozenset()            # entries that are OUT of scope; these always win
     allow_credential_change: bool = False        # resets, email changes, factor enrolment
     allow_cross_principal_write: bool = False    # the oracle's destructive write probe
     max_actions: int = 500                       # hard cap; fails closed
@@ -159,19 +178,89 @@ class EngagementPolicy:
             f"({len(self.identifiers)} identifier(s) in scope)")
 
     def check_host(self, host: str) -> Optional[str]:
+        """The COARSE question: could this host ever be in scope, at any path?
+
+        Necessary, not sufficient — a host may be in scope only under a path prefix, and
+        an exclusion may be path-scoped. `check_url` is the gate that actually decides."""
         host = (host or "").lower().rstrip(".")
-        for allowed in self.hosts:
-            a = allowed.lower().rstrip(".")
-            if host == a or host.endswith("." + a):
-                return None
+        if not host:
+            return f"no host to check against the scope for '{self.name}'"
+        for entry in self.excluded:
+            h, path = _split_entry(entry)
+            if path is None and _host_matches(host, h):
+                return (f"host {host!r} is explicitly EXCLUDED from the scope for "
+                        f"'{self.name}'")
+        if any(_host_matches(host, _split_entry(e)[0]) for e in self.hosts):
+            return None
         return f"host {host!r} is not in the authorized scope for '{self.name}'"
 
     def check_url(self, url: str) -> Optional[str]:
-        """Refuse a URL outside scope — the check a redirect or an emailed link needs."""
+        """The real gate: refuse a URL outside scope, path included.
+
+        An exclusion beats an inclusion at every level. The path is compared both raw and
+        percent-decoded/dot-segment-normalised, so a URL that reaches excluded content by
+        EITHER reading is refused — otherwise `/excluded/` is evaded by `/a/../excluded/`
+        or by percent-encoding a character in it."""
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https"):
             return f"refusing non-HTTP URL scheme {parts.scheme!r}"
-        return self.check_host(parts.hostname or "")
+        if parts.username or parts.password:
+            return "refusing a URL that carries credentials in its authority"
+        host = (parts.hostname or "").lower().rstrip(".")
+        if not host:
+            return f"refusing a URL with no host: {url!r}"
+        paths = _path_readings(parts.path or "/")
+        for entry in self.excluded:
+            if _entry_matches(host, paths, entry):
+                return (f"{url!r} is explicitly EXCLUDED from the scope for "
+                        f"'{self.name}' by {entry!r}")
+        for entry in self.hosts:
+            if _entry_matches(host, paths, entry):
+                return None
+        return f"{url!r} is not in the authorized scope for '{self.name}'"
+
+
+def _split_entry(entry: str) -> tuple:
+    """"https://h/p/" -> ("h", "/p/"); "h" -> ("h", None). A path of "/" means "any path",
+    because that is what a programme means when it lists a bare host."""
+    e = str(entry).strip().lower()
+    for prefix in ("https://", "http://"):
+        if e.startswith(prefix):
+            e = e[len(prefix):]
+    host, slash, path = e.partition("/")
+    host = host.rstrip(".")
+    if not slash:
+        return host, None
+    path = "/" + path
+    return host, (None if path == "/" else path)
+
+
+def _host_matches(host: str, pattern: str) -> bool:
+    """Exact, or subdomains only for a `*.` wildcard (never the apex — the narrow reading)."""
+    if not pattern:
+        return False
+    if pattern.startswith("*."):
+        return host.endswith(pattern[1:])
+    return host == pattern
+
+
+def _path_readings(path: str) -> tuple:
+    """Every reading of a path an exclusion must be compared against."""
+    readings = {path}
+    try:
+        decoded = unquote(path)
+        readings.add(decoded)
+        readings.add(normpath(decoded) + ("/" if decoded.endswith("/") else ""))
+    except Exception:                      # pragma: no cover - unquote is total in practice
+        pass
+    return tuple(readings)
+
+
+def _entry_matches(host: str, paths: tuple, entry: str) -> bool:
+    h, prefix = _split_entry(entry)
+    if not _host_matches(host, h):
+        return False
+    return prefix is None or any(p.startswith(prefix) for p in paths)
 
 
 # The policy a mock target runs under: everything permitted, because nothing is real.

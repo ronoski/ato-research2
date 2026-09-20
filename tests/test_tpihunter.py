@@ -1125,12 +1125,22 @@ class TestEngagementPolicy(unittest.TestCase):
         self.assertEqual(g.audit.counts(), {"dry-run": 2})
         self.assertEqual(len(g._inner.t.accounts), 0)
 
-    def test_host_scope_rejects_lookalikes_and_accepts_subdomains(self):
-        p = self._policy()
+    def test_an_exactly_listed_host_does_not_admit_its_subdomains(self):
+        # A programme lists `example.com` and `*.example.com` as different entries.
+        # Admitting subdomains of an exact entry grants more than the programme did —
+        # this is the rule that let api.accounts.nintendo.com through on a real scope.
+        p = self._policy()      # hosts = {"staging.acme.example"}, exact
         self.assertIsNone(p.check_url("https://staging.acme.example/login"))
-        self.assertIsNone(p.check_url("https://api.staging.acme.example/login"))
-        for bad in ("https://evil.example/", "https://notstaging.acme.example/",
+        for bad in ("https://api.staging.acme.example/login", "https://evil.example/",
+                    "https://notstaging.acme.example/",
                     "https://staging.acme.example.evil.test/", "file:///etc/passwd"):
+            self.assertIsNotNone(p.check_url(bad), bad)
+
+    def test_a_wildcard_entry_admits_subdomains_but_not_the_apex(self):
+        p = self._policy(hosts=frozenset({"*.acme.example"}))
+        self.assertIsNone(p.check_url("https://staging.acme.example/login"))
+        self.assertIsNone(p.check_url("https://a.b.acme.example/login"))
+        for bad in ("https://acme.example/", "https://acme.example.evil.test/"):
             self.assertIsNotNone(p.check_url(bad), bad)
 
     def test_guard_is_transparent_to_the_hunt(self):
