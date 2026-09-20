@@ -2657,5 +2657,65 @@ class TestCredentialStructure(unittest.TestCase):
         self.assertTrue(any("too few" in n for n in rep.notes))
 
 
+class TestSurfaceTriage(unittest.TestCase):
+    """Choosing WHERE to point the modes. A framework with five modes and no targeting
+    will be aimed at the most obvious asset, which on a mature estate is the most hardened
+    one — eleven of twelve cells went to a flagship consumer IdP while eleven other
+    in-scope auth surfaces, two of them named `-dev`, were never touched."""
+
+    def _s(self, **kw):
+        from tpihunter.surface import Surface, score
+        base = dict(url="https://h/", host="h", reachable=True, status=200)
+        base.update(kw)
+        return score(Surface(**base))
+
+    def test_a_non_production_identity_api_outranks_a_marketing_page(self):
+        dev = self._s(host="library-dev.accountportal.example", status=401, json_api=True)
+        www = self._s(host="www.example.com", status=200)
+        self.assertGreater(dev.score, www.score)
+        self.assertTrue(any("non-production" in x for x in dev.signals))
+
+    def test_the_reason_is_recorded_not_just_the_rank(self):
+        s = self._s(host="id.example.net", status=403, sets_cookie=("SID",))
+        self.assertTrue(s.signals)
+        self.assertTrue(any("identity surface" in x for x in s.signals))
+        self.assertTrue(any("gated" in x for x in s.signals))
+
+    def test_an_unreachable_asset_scores_nothing_and_says_so(self):
+        s = self._s(reachable=False, status=None)
+        self.assertEqual(s.score, 0)
+        self.assertIn("unreachable", s.signals)
+
+    def test_a_catch_all_makes_every_path_look_reachable(self):
+        """The regression. Measured live: a developer portal served a byte-identical page
+        for /, /welcome, /j_spring_security_logout and a nonsense path — three false
+        'reachable without auth' results."""
+        from tpihunter.surface import catchall_baseline
+
+        class _R:
+            def __init__(self, status, text): self.status, self.text = status, text
+            headers = {}
+
+        CATCHALL = "<html>portal landing</html>"
+        send = lambda u: _R(200, CATCHALL)
+        base = catchall_baseline("https://h", send)
+        self.assertIsNotNone(base)
+        # every path returns the catch-all, so nothing is distinct
+        self.assertFalse(base.distinct(200, CATCHALL))
+        # a genuinely different page clears the floor
+        self.assertTrue(base.distinct(200, "<html>admin console</html>"))
+        # so does a different status
+        self.assertTrue(base.distinct(403, CATCHALL))
+
+    def test_the_baseline_path_is_unguessable_so_it_cannot_be_special_cased(self):
+        from tpihunter.surface import catchall_baseline
+        seen = []
+        class _R:
+            status, text, headers = 200, "x", {}
+        catchall_baseline("https://h", lambda u: seen.append(u) or _R())
+        catchall_baseline("https://h", lambda u: seen.append(u) or _R())
+        self.assertNotEqual(seen[0], seen[1])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

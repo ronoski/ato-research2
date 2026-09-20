@@ -138,6 +138,32 @@ by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a valu
 never the canary, and the restore is verified — a failure is recorded in
 `Verdict.controls`, not left silently corrupting the target.
 
+## Surface triage — deciding where to point the modes
+
+A framework with five hunting modes and no targeting will be aimed at the most obvious
+asset, which on a mature estate is the most hardened one. That is exactly what happened on
+the first real engagement: **eleven of twelve cells went to the flagship consumer identity
+provider**, while eleven other in-scope auth surfaces — two with `dev` in the hostname,
+several device-auth and internal management planes — were never touched. No methodology
+gap explains that. It was a targeting gap, and it is the reason nothing was found.
+
+`surface.py` ranks a scope list from **one bounded request per asset**, on evidence rather
+than on which name is most familiar: non-production naming, identity-shaped hostname, an
+API rather than a rendered UI, a declared auth scheme, a 401/403, cookies issued. Each
+asset carries the reason for its score, because the ranking is a hypothesis about where to
+look, not a finding.
+
+Run against the Nintendo estate it put two `-dev` identity surfaces at the top and
+surfaced three auth systems that had never been probed — a Spring Security developer
+portal, a legacy Nintendo Network login, and an internal NDID console.
+
+**The catch-all control.** A path is "reachable" only if it says something the app does not
+already say for a path that certainly does not exist. `catchall_baseline()` fetches an
+unguessable nonsense path and every other response must clear that floor. Measured live: a
+developer portal returned a **byte-identical 11,998-byte page** for `/`, `/welcome`,
+`/j_spring_security_logout` *and* a nonsense path — three "reachable without auth" results,
+all artefacts.
+
 ## Credential structure (the fifth mode)
 
 TPI reasons about a binding: who holds it, what proof justifies it, what revokes it. The
