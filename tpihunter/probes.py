@@ -6,6 +6,7 @@ a specific provenance failure. These are hand-written seeds; the next component
 """
 from __future__ import annotations
 
+from .creds import password
 from .harness import Plan, Step
 from .types import Principal
 
@@ -20,7 +21,7 @@ def pre_hijacking_plan(attacker: Principal, victim: Principal, email: str) -> Pl
         name="pre-account-hijacking (classic federated merge)",
         targets_clause="TPI-1",
         steps=[
-            Step(attacker, "register", {"email": email, "password": "AttackerPw!1"}),
+            Step(attacker, "register", {"email": email, "password": password("attacker:account")}),
             Step(victim, "sso_login", {"email": email}),
             Step(None, "arm"),      # victim now authenticated; snapshot attacker's pre-canary view
             Step(None, "plant"),    # victim writes private state it believes is its own
@@ -39,12 +40,12 @@ def reset_survives_change_plan(attacker: Principal, victim: Principal, email: st
         name="reset-token survives rebind",
         targets_clause="TPI-2",
         steps=[
-            Step(attacker, "register", {"email": email, "password": "AttackerPw!1"}),
+            Step(attacker, "register", {"email": email, "password": password("attacker:account")}),
             Step(attacker, "reset_request", {"email": email}),
             Step(victim, "sso_login", {"email": email}),
             Step(None, "arm"),
             Step(None, "plant"),
-            Step(attacker, "reset_consume", {"email": email, "new_password": "Pwn!pw12345"}),
+            Step(attacker, "reset_consume", {"email": email, "new_password": password("attacker:reset")}),
             Step(None, "assess"),
         ],
     )

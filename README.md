@@ -19,7 +19,7 @@ This repo has two halves:
 ## Quickstart
 
 ```bash
-python3 -m unittest discover     # regression suite (62 tests, stdlib only)
+python3 -m unittest discover     # regression suite (102 tests, stdlib only)
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo  # automata learning: L* + W-method oracle recovers & certifies the auth FSM
@@ -31,6 +31,7 @@ python3 -m tpihunter.matrix_demo # the revocation matrix: a 'patched' target sti
 python3 -m tpihunter.report_demo # turn the findings into a submittable evidence bundle
 python3 -m tpihunter.retry_demo  # oracle confirmation: a flaky target can't flip the verdict
 python3 -m tpihunter.alias_demo  # richer params: the agent drives a flow needing a second identifier
+python3 -m tpihunter.safety_demo # the oracle's controls + the engagement policy: what stops this misfiring
 ```
 
 The core is stdlib-only; no `pip install`. Two optional integrations bring their own
@@ -66,8 +67,23 @@ to the goal, the theory, and how to review and continue the work. Then
 **[`STATUS.md`](STATUS.md)** is the live board: current stage, what's done, what's
 next. Sessions work as a **relay — one at a time, never concurrently.**
 
-## Scope
+## Scope and safety
 
 Run only against systems you are authorized to test. This is a research and
 authorized-testing project; the built-in mock target exists so the loop can be
 exercised and validated without touching anyone's infrastructure.
+
+That instruction is also enforced in code, because "be careful" is not a control.
+Before a live adapter is used it is wrapped in an **engagement policy**
+([`tpihunter/policy.py`](tpihunter/policy.py)) that checks every action against the
+rules of engagement: an identifier allowlist (out-of-scope account ⇒ `ScopeViolation`,
+never handled by continuing), a host allowlist for redirects and emailed links, gates on
+credential changes and cross-principal writes, a hard request budget that fails closed, a
+rate limit, a `dry_run` that records what *would* run, and an audit trail with
+credentials redacted. Two things the policy cannot enforce for you: one transport per
+principal, and **own accounts only**.
+
+The verdict engine carries its own controls for the same reason — see *The oracle* in
+the [tool README](tpihunter/README.md#the-oracle-the-star), and
+`python3 -m tpihunter.safety_demo` for the three probes that used to produce confident,
+wrong answers.

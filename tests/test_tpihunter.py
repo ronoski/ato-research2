@@ -418,7 +418,15 @@ class TestMcpSession(unittest.TestCase):
 
     def test_run_probe_safe_and_invalid(self):
         s = self._session()
-        self.assertEqual(s.run_probe([["attacker", "register"]])["severity"], "safe")
+        # A probe with no victim step never plants a canary, so there is no ground truth to
+        # compare against: the honest answer is INCONCLUSIVE, not a confident "safe" (which
+        # would teach the agent this surface was tested and found secure).
+        r = s.run_probe([["attacker", "register"]])
+        self.assertEqual(r["severity"], "inconclusive")
+        self.assertEqual(r["withheld"], "canary_not_planted")
+        self.assertEqual(r["reason"], "inconclusive")
+        self.assertEqual(s.run_probe([["attacker", "register"], ["victim", "sso_login"]],
+                                     )["severity"], "takeover")   # a real probe still fires
         self.assertFalse(s.run_probe([["attacker", "reset_consume"]])["ok"])   # ordering
         self.assertFalse(s.run_probe([["attacker", "nope"]])["ok"])            # unknown action
         self.assertFalse(s.run_probe([["nobody", "register"]])["ok"])          # bad role
@@ -850,6 +858,488 @@ class TestLLM(unittest.TestCase):
         res = hunter.hunt(LLMStrategist(complete_fn, max_rounds=1))
         self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
         self.assertEqual(res.probes_used, 2)
+
+
+# =========================================================================== #
+#  Safety: the oracle's controls, the alphabet's input validation, and the
+#  engagement policy. These are the invariants that decide whether this tool is
+#  fit to point at something real.
+# =========================================================================== #
+SHARED = "ops-shared@corp.example"
+
+
+def _shared_probe(merged, control, patched=False, **oracle_kw):
+    from tpihunter.enumerator import make_candidate
+    attacker, victim = _principals()
+    a = MockAdapter(patched=patched, control=control)
+    cand = make_candidate(merged, attacker, victim, SHARED)
+    return run_plan(a, cand.plan,
+                    AtoOracle(a, attacker, victim, resource=SHARED, **oracle_kw))[0]
+
+
+class TestOracleControls(unittest.TestCase):
+    """The load-bearing invariant is 'never a false takeover'. Before these controls it
+    was false: a legitimately shared account, or two principals wired to one context,
+    graded TAKEOVER at 0.90-0.99 on zero adversarial steps. The mirror-image defect was
+    just as bad: a probe whose canary never got planted graded SAFE at 0.95, which is how
+    an agent is taught a surface is secure when it was never measured."""
+
+    def test_co_owner_is_not_a_takeover(self):
+        # both principals prove control of the identifier at the IdP: a shared ops mailbox,
+        # a family plan, a tenant seat. The attacker's access has justifying provenance.
+        attacker, victim = _principals()
+        v = _shared_probe((("attacker", "sso_login"), ("victim", "sso_login")),
+                          {victim.name: {SHARED}, attacker.name: {SHARED}})
+        self.assertEqual(v.severity.value, "safe")
+        self.assertEqual(v.withheld, "attacker_proved_control")
+
+    def test_confirmation_does_not_rescue_a_systematic_false_positive(self):
+        # M13 confirmation defends against transient noise; a shared account reproduces on
+        # every pass, so only the attribution guard can catch it.
+        attacker, victim = _principals()
+        for confirm in (0, 4):
+            v = _shared_probe((("attacker", "sso_login"), ("victim", "sso_login")),
+                              {victim.name: {SHARED}, attacker.name: {SHARED}}, confirm=confirm)
+            self.assertNotEqual(v.severity.value, "takeover", f"confirm={confirm}")
+
+    def test_principals_sharing_one_context_is_void_not_a_finding(self):
+        from tpihunter.adapter import Trace
+        attacker, victim = _principals()
+        a = MockAdapter(patched=False, control={victim.name: {SHARED}})
+        a.sso_login(victim, SHARED)
+        a.sess[attacker.name] = a.sess[victim.name]      # one session, two "principals"
+        o = AtoOracle(a, attacker, victim, resource=SHARED).arm(Trace())
+        v = o.plant().assess(Trace())
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "principals_not_independent")
+
+    def test_access_with_no_attacker_action_is_unattributable(self):
+        from tpihunter.adapter import Trace
+        attacker, victim = _principals()
+        a = MockAdapter(patched=False, control={victim.name: {SHARED}, attacker.name: {SHARED}})
+        a.sso_login(victim, SHARED)
+        a.sso_login(attacker, SHARED)
+        o = AtoOracle(a, attacker, victim, resource=SHARED)
+        o.arm(); o.plant()
+        v = o.assess(Trace())                            # nothing in the trace to blame
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "no_attacker_action")
+
+    def test_unplanted_canary_is_inconclusive_not_safe(self):
+        # the POSITIVE control: the victim never establishes a session, so no canary exists
+        # and every comparison is vacuous. "safe" here would be a silent false negative.
+        attacker, victim = _principals()
+        v = _shared_probe((("attacker", "register"), ("victim", "reset_request")),
+                          {victim.name: {SHARED}})
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "canary_not_planted")
+        self.assertFalse(v.controls["canary_planted"])
+
+    def test_unscoped_read_endpoint_cannot_fake_a_by_ref_read(self):
+        # the NEGATIVE control: a target that answers ANY reference would otherwise hand the
+        # oracle a by-reference canary read for free.
+        from tpihunter.adapter import Trace
+        from tpihunter.types import Observation
+        attacker, victim = _principals()
+
+        class UnscopedReads(MockAdapter):
+            def read_marker(self, p, ref=None):
+                if ref is None:
+                    return super().read_marker(p)
+                acc = self.t.accounts.get(ref)
+                return Observation(True, extracted={"value": acc.marker if acc else "anything"})
+
+        a = UnscopedReads(patched=True, control={victim.name: {SHARED}})
+        a.sso_login(victim, SHARED)
+        o = AtoOracle(a, attacker, victim, resource=SHARED)
+        o.arm(Trace()); o.plant()
+        v = o.assess(Trace())
+        self.assertFalse(v.controls["ref_reads_scoped"])
+        self.assertFalse([e for e in v.evidence if e.kind == "canary_read" and e.strength == 2])
+
+    def test_real_laundering_still_fires_at_full_confidence(self):
+        # the controls must not cost recall: the bug the tool exists for is untouched
+        attacker, victim = _principals()
+        v = _shared_probe((("attacker", "register"), ("victim", "sso_login")),
+                          {victim.name: {SHARED}})
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertEqual(v.clause_id, "TPI-1")
+        self.assertIsNone(v.withheld)
+        self.assertGreaterEqual(v.confidence, 0.99)
+
+    def test_destructive_write_probe_is_off_by_default(self):
+        from tpihunter.adapter import Trace
+        attacker, victim = _principals()
+        a = MockAdapter(patched=False, control={victim.name: {SHARED}})
+        a.register(attacker, SHARED, "x")
+        a.sso_login(victim, SHARED)
+        o = AtoOracle(a, attacker, victim, resource=SHARED)
+        o.arm(Trace()); o.plant()
+        v = o.assess(Trace())
+        self.assertFalse([e for e in v.evidence if e.kind == "canary_write"])
+        self.assertEqual(a.t.accounts[o._victim_ref].marker, o._canary)   # untouched
+
+    def test_write_probe_when_enabled_proves_mutation_and_restores(self):
+        from tpihunter.adapter import Trace
+        attacker, victim = _principals()
+        a = MockAdapter(patched=False, control={victim.name: {SHARED}})
+        a.register(attacker, SHARED, "x")
+        a.sso_login(victim, SHARED)
+        o = AtoOracle(a, attacker, victim, resource=SHARED, mutate=True)
+        o.arm(Trace()); o.plant()
+        v = o.assess(Trace())
+        self.assertTrue([e for e in v.evidence if e.kind == "canary_write"])
+        self.assertTrue(v.controls["write_probe_restored"])
+        self.assertEqual(a.t.accounts[o._victim_ref].marker, o._canary)   # restored
+        self.assertNotIn(o._canary, o._stamp)     # the ground truth is never what we write
+
+
+class TestSynthesizedActionValidation(unittest.TestCase):
+    """A synthesized action name becomes getattr(adapter, name) at run time, and the name
+    is chosen by a model reading the target's own output. It is untrusted input."""
+
+    BAD = ["__init__", "_inner", "Register", "a.b", "", "x" * 64, "register-action"]
+
+    def test_register_action_rejects_unsafe_ids(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession()
+        for aid in self.BAD:
+            r = s.register_action(aid, "seed")
+            self.assertFalse(r["ok"], f"accepted {aid!r}")
+            self.assertNotIn(aid, s.specs)
+
+    def test_register_action_rejects_harness_reserved_ids(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession()
+        for aid in ("arm", "plant", "assess", "capture_binding", "whoami", "write_marker"):
+            self.assertFalse(s.register_action(aid, "seed")["ok"], f"accepted {aid!r}")
+
+    def test_register_action_still_accepts_a_real_flow(self):
+        from tpihunter.mcp_tools import HuntSession
+        s = HuntSession()
+        self.assertTrue(s.register_action("magic_link", "raise", needs_control=True)["ok"])
+
+    def test_llm_strategist_drops_unsafe_ids(self):
+        attacker, victim = _principals()
+        state = HuntState(dict(ACTIONS), attacker, victim, EMAIL)
+        LLMStrategist.parse_proposals(
+            LLMStrategist(lambda _p: ""),
+            json.dumps({"new_actions": [{"id": "__init__", "effect": "seed"},
+                                        {"id": "magic_link", "effect": "raise"}],
+                        "probes": []}), state)
+        self.assertNotIn("__init__", state.specs)
+        self.assertIn("magic_link", state.specs)
+
+    def test_dispatch_contains_a_non_observation_return(self):
+        # defence in depth: if a name ever does reach getattr, a foreign return value is
+        # contained here rather than crashing the loop far from the cause
+        from tpihunter.harness import execute_action
+        attacker, _ = _principals()
+
+        class Odd(MockAdapter):
+            def weird(self, p):
+                return "not an Observation"
+
+        obs = execute_action(Odd(), attacker, "weird", {})
+        self.assertFalse(obs.ok)
+        self.assertIn("not an alphabet action", obs.note)
+
+
+class TestEngagementPolicy(unittest.TestCase):
+    """Rules of engagement enforced per action, so the common accidents are impossible
+    rather than unlikely."""
+
+    EMAIL = "pentest-v@acme.example"
+
+    def _policy(self, **kw):
+        from tpihunter.policy import EngagementPolicy
+        base = dict(name="acme", authorized_by="security@acme.example / SEC-1421",
+                    identifiers=frozenset({self.EMAIL}),
+                    hosts=frozenset({"staging.acme.example"}),
+                    allow_credential_change=True)
+        base.update(kw)
+        return EngagementPolicy(**base)
+
+    def _guarded(self, policy=None, **adapter_kw):
+        from tpihunter.policy import guard
+        victim = Principal("victim")
+        return guard(MockAdapter(control={victim.name: {self.EMAIL}}, **adapter_kw),
+                     policy or self._policy())
+
+    def test_preflight_names_what_is_missing(self):
+        from tpihunter.policy import EngagementPolicy
+        problems = EngagementPolicy(name="x").preflight()
+        self.assertTrue(any("authorized_by" in p for p in problems))
+        self.assertTrue(any("identifiers" in p for p in problems))
+        self.assertEqual(self._policy().preflight(), [])
+
+    def test_guard_refuses_to_build_on_an_unready_policy(self):
+        from tpihunter.policy import EngagementPolicy, ScopeViolation, guard
+        with self.assertRaises(ScopeViolation):
+            guard(MockAdapter(), EngagementPolicy(name="x"))
+
+    def test_out_of_scope_identifier_raises_even_when_passed_positionally(self):
+        # the alphabet is dispatched positionally; a guard that only read kwargs would
+        # check nothing on exactly the calls that matter
+        from tpihunter.policy import ScopeViolation
+        g = self._guarded()
+        with self.assertRaises(ScopeViolation):
+            g.register(Principal("attacker"), "ceo@acme.example", "pw")
+
+    def test_in_scope_hunt_still_finds_the_bug_and_is_audited(self):
+        from tpihunter.enumerator import make_candidate
+        attacker, victim = _principals()
+        g = self._guarded(patched=False)
+        plan = make_candidate((("attacker", "register"), ("victim", "sso_login")),
+                              attacker, victim, self.EMAIL).plan
+        v = run_plan(g, plan, AtoOracle(g, attacker, victim, resource=self.EMAIL))[0]
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertTrue(g.actions_used > 0)
+        self.assertEqual(len(g.audit.records), g.actions_used)
+
+    def test_credential_change_is_gated(self):
+        g = self._guarded(self._policy(allow_credential_change=False))
+        obs = g.reset_consume(Principal("victim"), self.EMAIL, "pw")
+        self.assertFalse(obs.ok)
+        self.assertIn("engagement policy", obs.note)
+
+    def test_cross_principal_write_is_gated(self):
+        g = self._guarded()
+        self.assertFalse(g.write_marker(Principal("attacker"), "x", ref="acct_1").ok)
+        g2 = self._guarded(self._policy(allow_cross_principal_write=True))
+        g2.write_marker(Principal("attacker"), "x", ref="acct_1")   # permitted: no refusal note
+        self.assertNotIn("refused", [r.outcome for r in g2.audit.records])
+
+    def test_budget_fails_closed_and_counts_reads(self):
+        from tpihunter.policy import BudgetExhausted
+        g = self._guarded(self._policy(max_actions=3))
+        with self.assertRaises(BudgetExhausted):
+            for _ in range(10):
+                g.whoami(Principal("victim"))
+        self.assertEqual(g.actions_used, 3)
+
+    def test_dry_run_executes_nothing(self):
+        g = self._guarded(self._policy(dry_run=True))
+        g.register(Principal("attacker"), self.EMAIL, "pw")
+        g.sso_login(Principal("victim"), self.EMAIL)
+        self.assertEqual(g.audit.counts(), {"dry-run": 2})
+        self.assertEqual(len(g._inner.t.accounts), 0)
+
+    def test_host_scope_rejects_lookalikes_and_accepts_subdomains(self):
+        p = self._policy()
+        self.assertIsNone(p.check_url("https://staging.acme.example/login"))
+        self.assertIsNone(p.check_url("https://api.staging.acme.example/login"))
+        for bad in ("https://evil.example/", "https://notstaging.acme.example/",
+                    "https://staging.acme.example.evil.test/", "file:///etc/passwd"):
+            self.assertIsNotNone(p.check_url(bad), bad)
+
+    def test_guard_is_transparent_to_the_hunt(self):
+        # the policy layer must not change what the loop finds, only what it is allowed to do
+        from tpihunter.policy import guard
+        attacker, victim = _principals()
+        policy = self._policy(max_actions=100_000)
+
+        def factory():
+            return guard(MockAdapter(patched=False, control={victim.name: {self.EMAIL}}), policy)
+
+        res = AgentHunter(factory, attacker, victim, self.EMAIL, budget=300).hunt(
+            EnumeratorStrategist())
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+
+    def test_synthesized_verb_dispatches_through_the_guard(self):
+        # the guard must keep the inner signature visible, or a verb taking `alias` and not
+        # `email` would break on the implicit email every step carries
+        from tpihunter.enumerator import recovery_alias
+        from tpihunter.harness import execute_action
+        from tpihunter.policy import EngagementPolicy, guard
+        attacker = Principal("attacker")
+        alias = recovery_alias("attacker")
+        g = guard(MockAdapter(control={attacker.name: {alias}}),
+                  EngagementPolicy(name="a", authorized_by="x",
+                                   identifiers=frozenset({self.EMAIL, alias}),
+                                   allow_credential_change=True))
+        g.register(attacker, self.EMAIL, "pw")
+        obs = execute_action(g, attacker, "add_alias", {"email": self.EMAIL, "alias": alias})
+        self.assertTrue(obs.ok)
+
+    def test_audit_redacts_credentials(self):
+        g = self._guarded()
+        g.register(Principal("attacker"), self.EMAIL, "hunter2-correct-horse")
+        rendered = g.audit.render()
+        self.assertNotIn("hunter2-correct-horse", rendered)
+        self.assertIn("redacted", rendered)
+
+
+class TestRedaction(unittest.TestCase):
+    def test_masks_secret_shapes(self):
+        from tpihunter.redact import redact
+        for secret, text in (
+                ("b3f1c2d4e5f60718293a4b5c6d7e8f90",
+                 "Reset: http://t/reset?token=b3f1c2d4e5f60718293a4b5c6d7e8f90"),
+                ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.abcdefghij",
+                 "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.abcdefghij"),
+                ("s3cret-value", '{"password": "s3cret-value"}')):
+            out = redact(text)
+            self.assertNotIn(secret, out)
+            self.assertIn("redacted", out)
+
+    def test_leaves_identifiers_readable(self):
+        from tpihunter.redact import redact
+        for text in ("attacker registered victim@corp.example (email still 'claimed')",
+                     "P<victim, email:victim@corp.example, idp>", "acct_1", "TPI-4"):
+            self.assertEqual(redact(text), text)
+
+    def test_recurses_and_is_idempotent(self):
+        from tpihunter.redact import redact
+        once = redact({"a": ["token=b3f1c2d4e5f60718293a4b5c6d7e8f90"], "b": 3})
+        self.assertNotIn("b3f1c2d4e5f60718293a4b5c6d7e8f90", str(once))
+        self.assertEqual(redact(once), once)
+        self.assertEqual(once["b"], 3)
+
+    def test_report_bundle_scrubs_a_leaked_token(self):
+        from tpihunter.report import build_bundle
+        from tpihunter.types import Observation
+        attacker, victim = _principals()
+        token = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+        class Chatty(MockAdapter):
+            def sso_login(self, p, email):
+                obs = super().sso_login(p, email)
+                obs.note += f" (set-cookie: session={token})"
+                return obs
+
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        fired = [c for c in cands
+                 if _verdict_via(Chatty, c.plan, attacker, victim).severity.value == "takeover"]
+        clusters = deduplicate(fired[:3], attacker, victim, EMAIL,
+                               lambda pl: _verdict_via(Chatty, pl, attacker, victim))
+        reports = build_bundle(clusters, attacker=attacker, victim=victim, email=EMAIL,
+                               run_fn=lambda pl: _run_via(Chatty, pl, attacker, victim))
+        doc = "\n".join(r.to_markdown() for r in reports)
+        self.assertNotIn(token, doc)
+
+
+def _run_via(cls, plan, attacker, victim):
+    a = cls(patched=False, control={victim.name: {EMAIL}})
+    return run_plan(a, plan, AtoOracle(a, attacker, victim, resource=EMAIL))
+
+
+def _verdict_via(cls, plan, attacker, victim):
+    return _run_via(cls, plan, attacker, victim)[0]
+
+
+class TestCredentialHygiene(unittest.TestCase):
+    """A password literal in source is a password published on GitHub, and after a live
+    run it is the password on the account under test."""
+
+    def test_no_credential_this_tool_presents_appears_in_source(self):
+        import pathlib
+        from tpihunter import creds
+        root = pathlib.Path(creds.__file__).parent
+        source = "\n".join(f.read_text() for f in root.glob("*.py"))
+        for label in ("attacker:account", "victim:account", "owner:account",
+                      "attacker:reset", "fallback:seed"):
+            self.assertNotIn(creds.password(label), source)
+
+    def test_passwords_are_stable_per_label_and_distinct_across_labels(self):
+        from tpihunter import creds
+        self.assertEqual(creds.password("attacker:account"), creds.password("attacker:account"))
+        self.assertNotEqual(creds.password("attacker:account"), creds.password("victim:account"))
+        self.assertGreaterEqual(len(creds.password("x")), 20)
+
+    def test_recovery_alias_is_tagged_and_non_routable(self):
+        from tpihunter.enumerator import recovery_alias
+        alias = recovery_alias("attacker")
+        from tpihunter.creds import session_id
+        self.assertIn(session_id(), alias)
+        self.assertTrue(alias.endswith(".example"))   # RFC 2606 reserved: cannot resolve
+
+
+class TestBystanderControl(unittest.TestCase):
+    """The diagnosis control. A takeover is not automatically a *provenance* takeover: if an
+    account that took no part in the probe reaches the victim's resource just as well, the
+    bug is object-level authorization and citing a TPI clause would ship the wrong fix."""
+
+    class FlatIdor(MockAdapter):
+        """Correct auth, correct revocation — object reads simply are not scoped to the owner."""
+        def read_marker(self, p, ref=None):
+            from tpihunter.types import Observation
+            if ref is None:
+                return super().read_marker(p)
+            acc = self.t.accounts.get(ref)
+            return Observation(acc is not None, extracted={"value": acc.marker if acc else None})
+
+    def _run(self, cls, merged, patched=True, **oracle_kw):
+        from tpihunter.enumerator import make_candidate
+        attacker, victim = _principals()
+        a = cls(patched=patched, control={victim.name: {EMAIL}})
+        return run_plan(a, make_candidate(merged, attacker, victim, EMAIL).plan,
+                        AtoOracle(a, attacker, victim, resource=EMAIL, **oracle_kw))[0]
+
+    PROBE = (("attacker", "register"), ("victim", "sso_login"))
+
+    def test_flat_idor_is_not_diagnosed_as_laundering(self):
+        v = self._run(self.FlatIdor, self.PROBE)
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertEqual(v.clause_id, "AUTHZ-1")
+        self.assertEqual(v.failure_mode, "authorization")
+        self.assertNotIn("TPI", v.clause_id)
+        self.assertTrue([e for e in v.evidence if e.kind == "bystander_read"])
+        self.assertEqual(v.controls["bystander"], "enrolled and independent")
+
+    def test_real_laundering_is_unaffected_by_the_control(self):
+        v = self._run(MockAdapter, self.PROBE, patched=False)
+        self.assertEqual(v.clause_id, "TPI-1")
+        self.assertFalse([e for e in v.evidence if e.kind == "bystander_read"])
+        self.assertEqual(v.controls["bystander"], "enrolled and independent")
+
+    def test_taxonomy_is_not_widened_to_absorb_its_complement(self):
+        from tpihunter.clauses import BROAD_AUTHORIZATION, CATALOG, CLAUSES
+        self.assertNotIn(BROAD_AUTHORIZATION.id, CLAUSES)   # CLAUSES stays pure TPI
+        self.assertIn(BROAD_AUTHORIZATION.id, CATALOG)      # but a verdict still resolves
+        self.assertIsNone(BROAD_AUTHORIZATION.mode)         # not one of the three modes
+
+    def test_missing_adapter_support_is_recorded_not_assumed(self):
+        class NoBystander(MockAdapter):
+            enrol_bystander = None
+        v = self._run(NoBystander, self.PROBE, patched=False)
+        self.assertIn("unavailable", v.controls["bystander"])
+        self.assertEqual(v.clause_id, "TPI-1")       # still detects, just cannot discriminate
+
+    def test_a_bystander_that_is_not_independent_is_refused(self):
+        from tpihunter.types import Observation
+
+        class FakeBystander(MockAdapter):
+            def enrol_bystander(self, p):
+                self.sess[p.name] = self.sess.get("victim")   # the victim's own context
+                return Observation(True, identity="whatever")
+
+        v = self._run(FakeBystander, self.PROBE, patched=False)
+        self.assertIn("not independent", v.controls["bystander"])
+        self.assertEqual(v.clause_id, "TPI-1")
+
+    def test_control_can_be_disabled(self):
+        v = self._run(self.FlatIdor, self.PROBE, bystander=None)
+        self.assertEqual(v.controls["bystander"], "disabled")
+        self.assertNotEqual(v.clause_id, "AUTHZ-1")   # without the control, misdiagnosed
+
+    def test_authz_findings_collapse_to_one_bug_and_report_as_non_tpi(self):
+        from tpihunter.report import build_bundle
+        attacker, victim = _principals()
+
+        def run(plan):
+            a = self.FlatIdor(patched=True, control={victim.name: {EMAIL}})
+            return run_plan(a, plan, AtoOracle(a, attacker, victim, resource=EMAIL))
+
+        cands = enumerate_plans(attacker, victim, EMAIL)
+        fired = [c for c in cands if run(c.plan)[0].severity.value == "takeover"]
+        self.assertGreater(len(fired), 20)
+        clusters = deduplicate(fired, attacker, victim, EMAIL, lambda pl: run(pl)[0])
+        self.assertEqual([c.clause_id for c in clusters], ["AUTHZ-1"])
+        doc = build_bundle(clusters, attacker=attacker, victim=victim, email=EMAIL,
+                           run_fn=run)[0].to_markdown()
+        self.assertIn("NOT a Trust-Provenance Integrity failure", doc)
+        self.assertIn("not the identity lifecycle", doc)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 # READINESS — is TPI-Hunter ready to be an AI hunter?
 
-**A candid strategic handoff. Written 2026-09-16 by the shift that landed M13–M15.**
+**A candid strategic handoff. Written 2026-09-16 by the shift that landed M13–M15;
+amended 2026-09-20 by the safety-hardening shift (see *Amendment* at the bottom).**
 Read this *before* picking a task. `HANDOFF.md` onboards you to the code; `STATUS.md` is the
 task board; **this file tells you the truth about where the project actually stands**, so you
 don't spend a rotation polishing the wrong thing. If you only read one paragraph, read the
@@ -40,7 +41,7 @@ Rungs 2–4 *are* the "AI hunter" claim. None is reachable on the mock.
 
 ## What IS done — do not redo it
 
-- The full loop, self-validating on the mock: **57 tests, 11 demos green**, stdlib-only core.
+- The full loop, self-validating on the mock: **102 tests, 12 demos green**, stdlib-only core.
 - Two judgment modes: the two-principal confluence **oracle** and the single-principal
   **revocation matrix**.
 - Automated abstraction: **L\*** learns the auth FSM, the **W-method** oracle (M15) certifies it
@@ -64,14 +65,17 @@ mock capability just because it is the only unblocked thing.
    Grab engagement) didn't fit** — its ROE forbids scripted account creation and its own model
    out-classes the mock plumbing, so TPI-Hunter became an offline lens that that model already
    subsumes. That is a signal, not a footnote.
-2. **The oracle can false-positive on a real target.** `identity_confluence` grades TAKEOVER
-   whenever the attacker resolves to the victim's identity — true by construction on the mock
-   (the control model *defines* the principals as independent), but on a real target a
-   legitimately **shared / tenant / SSO-org / family** account resolves two principals to one
-   identity (and yields a canary read too). The load-bearing invariant — *never a false takeover*
-   — currently rests on an independence assumption a real target won't honor. M13 confirmation
-   guards *flaky independent* failures, not *systematic* deception (a stale-identity cache fools
-   every pass).
+2. **The oracle can false-positive on a real target** — *reduced, not closed (2026-09-20).*
+   The diagnosis above was right and was, if anything, understated: a legitimately shared
+   account graded **TAKEOVER at 0.99 on an empty trace**, with `confirm=4` agreeing on every
+   pass, and it performed a cross-principal *write* while doing so. The oracle now carries
+   positive/negative controls and three attribution guards (independence, justification,
+   attribution) that make that class a non-finding by construction, with regression tests and
+   `safety_demo` as the witness. What is *not* closed: the guards are validated only on the
+   mock, and they cover the shapes we could name. A systematic deception that produces
+   confluence **after** the attacker has acted and **without** an attacker proof — a stale
+   identity cache is the example the original text gave — still fires. Only a live target
+   tells you which shapes actually occur.
 3. **The thesis is argued, not measured.** The Composition-Blindness argument and the taxonomy
    *assert* that the worst ATOs are provenance failures; there is **no CVE-corpus study** showing
    real disclosed ATOs are TPI-classifiable *and* invisible to a reachability view.
@@ -101,8 +105,10 @@ sub-mode, stop and re-read the Bottom line.
 
 ✅ **If the owner authorizes a target** (the only thing that moves the needle):
 1. Build **M4** minimally — a real `TargetAdapter` (one HTTP client per principal) + real channels
-   (mailbox/IdP) + **ROE enforcement baked in** (auth header, own-accounts-only, in-scope
-   allowlist, preflight gate). Isolate the new dep (`httpx`) like `anthropic`/`mcp`.
+   (mailbox/IdP). Isolate the new dep (`httpx`) like `anthropic`/`mcp`. **The ROE half is already
+   built** (`policy.py`: identifier/host allowlists, destructive-action gates, budget, dry run,
+   preflight, audit trail) and is ungated, so M4 is now adapter + channels, wrapped in
+   `policy.guard()`.
 2. **Reproduce a known finding** on that target and *watch the oracle for a false positive on a
    shared/tenant account* — that is the invariant's first real test.
 3. **Only then** let a real LLM strategist drive the live run, and add a stopping/coverage model.
@@ -118,6 +124,61 @@ sub-mode, stop and re-read the Bottom line.
    load-bearing component. Read the Decisions log first.
 3. **Accept that the framework is the deliverable and stop.** A clean, honest "done" beats
    busywork. This is a legitimate outcome.
+
+---
+
+---
+
+## Amendment — 2026-09-20 (safety hardening)
+
+A security review of the codebase, not of the theory. It changed no milestone and moved no
+rung; it fixed things that would have produced wrong answers or unsafe behaviour the first
+time this was pointed at something real.
+
+**Three demonstrated defects in the verdict engine**, each reproduced before it was fixed:
+
+| | was | now |
+|---|---|---|
+| a legitimately shared / tenant / co-owned account | `TAKEOVER 0.99` on an **empty trace**; `confirm=4` agreed every pass; it also *wrote* to the account | `SAFE`, `withheld=attacker_proved_control` — the attacker's own proof justifies its access |
+| two principals wired to one context (a mis-built live adapter) | `TAKEOVER 0.99` | `INCONCLUSIVE`, `withheld=principals_not_independent` |
+| a probe whose canary never got planted | `SAFE 0.95` — a **false negative reported as a secure result**, which is what teaches the agent to stop looking there | `INCONCLUSIVE`, `withheld=canary_not_planted` |
+
+The third was not on the ranked list and is arguably the worse one: `enforced` reason codes
+feed the agent's coverage map and its patience-stop, so a probe that never ran was being
+counted as a surface that had been tested.
+
+**A fourth defect, in the diagnosis rather than the verdict.** A target with correct
+identity handling but a flat IDOR (any session reads any resource by reference) produced a
+true `TAKEOVER` under a *false clause*: `TPI-1, revoke-on-rebind`, whose remediation cannot
+close an authorization bug. Both existing controls passed — the endpoint is scoped-shaped,
+it just does not check ownership. The oracle now enrols a **bystander**, a third account
+that takes no part in the probe; if it reaches the victim's canary too, the access was
+never provenance-specific and the finding is reclassified `AUTHZ-1` (object-level
+authorization), which is kept **out of `CLAUSES`** — the three failure modes are the whole
+surface of a provenance failure, and absorbing a reachability-visible bug into them would
+make the taxonomy unfalsifiable. This is also the first executable version of the paper's
+own boundary claim: the control *measures* whether a finding is TPI-shaped or merely
+reachable.
+
+**What it added**
+- `oracle.py`: a positive control (the victim must read its own canary back), a negative
+  control (a never-valid reference must be refused) and a bystander control (an uninvolved
+  account must NOT reach the victim's resource) — the discipline `matrix.run_cell` already
+  had per cell, which the oracle lacked entirely; three attribution guards; a new
+  `Severity.INCONCLUSIVE` and `Verdict.withheld` / `Verdict.controls` so nothing is silently
+  downgraded; and the destructive cross-principal write is now **opt-in** with a verified
+  restore (it was on by default, once per confirmation pass, restore unchecked).
+- `policy.py`: rules of engagement as data, enforced per action, with an audit trail —
+  the M4 prerequisite, buildable without a target.
+- `redact.py` + `creds.py`: evidence bundles and audit trails scrubbed of secret-shaped
+  material, and no credential the tool presents to a target is a literal in this repo
+  (a live run used to leave accounts holding a password published on GitHub).
+- Input validation on the one place a model-chosen string reached `getattr(adapter, …)`:
+  `register_action("__init__", …)` was accepted and silently re-initialised the adapter
+  mid-probe; `register_action("capture_binding", …)` crashed the MCP server.
+
+**What it deliberately did not do:** add a mock feature, or claim any of this constitutes
+live validation. The bottom line below is unchanged.
 
 ---
 

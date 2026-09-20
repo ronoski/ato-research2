@@ -11,20 +11,26 @@ The pieces:
   harness      Plan/Step + run_plan: probes as data, executed with oracle checkpoints
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
+  policy       EngagementPolicy + guard(): rules of engagement enforced per action
+  redact       secret scrubbing for anything the tool emits
+  creds        per-run credentials and identifiers (never literals in source)
   demo         end-to-end self-test
 """
 from .adapter import ALPHABET, TargetAdapter, Trace
 from .agent import (AgentHunter, Attempt, Coverage, EnumeratorStrategist, HuntResult,
                     HuntState, LLMStrategist, Strategist)
-from .clauses import CLAUSES, FailureMode
+from .clauses import BROAD_AUTHORIZATION, CATALOG, CLAUSES, FailureMode
 from .dedup import Cluster, deduplicate
 from .flaky import FlakyAdapter
 from .harness import Plan, Step, execute_action, run_plan
 from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
                      default_mints, default_mutations, run_cell)
+from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
+                     PolicyViolation, ScopeViolation, for_mock, guard, policy_report)
+from .redact import redact
 from .mcp_tools import HuntSession
 from .report import Report, build_bundle, build_report, bundle_to_json, bundle_to_markdown, make_run_fn, revocation_report
-from .oracle import AtoOracle, Evidence, Severity, Verdict
+from .oracle import AtoOracle, Evidence, Severity, Verdict, Withheld
 from .types import Channel, Identifier, Observation, Principal, ProofEvent, TrustLevel
 
 # Note: `tpihunter.llm.make_complete_fn` (the real-model backend) is intentionally NOT
@@ -42,8 +48,10 @@ __all__ = [
     "default_mints", "default_mutations", "run_cell", "execute_action",
     "Report", "build_report", "build_bundle", "bundle_to_markdown", "bundle_to_json",
     "make_run_fn", "revocation_report",
-    "CLAUSES", "FailureMode",
+    "EngagementPolicy", "GuardedAdapter", "AuditLog", "guard", "for_mock", "policy_report",
+    "PolicyViolation", "ScopeViolation", "BudgetExhausted", "redact",
+    "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",
-    "AtoOracle", "Evidence", "Severity", "Verdict",
+    "AtoOracle", "Evidence", "Severity", "Verdict", "Withheld",
     "Channel", "Identifier", "Observation", "Principal", "ProofEvent", "TrustLevel",
 ]

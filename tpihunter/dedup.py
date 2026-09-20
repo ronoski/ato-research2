@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .clauses import BROAD_AUTHORIZATION
 from .enumerator import ACTIONS, ActionSpec, Candidate, build_plan, is_wellformed
 from .harness import Plan
 from .types import Principal
@@ -95,6 +96,12 @@ def _signature(min_merged: list, specs: dict[str, ActionSpec], clause_id: Option
     laundering step), so a bug via `sso_login` and one via a synthesized `magic_link`
     are separate findings (different flows to fix), while padding/order variants of each
     still merge. The minimal repro kept on the cluster shows one concrete path."""
+    if clause_id == BROAD_AUTHORIZATION.id:
+        # Not a provenance finding: the bug is in the resource's ownership check, not in
+        # any identity flow, so the effect shape and the trigger verb are incidental. All
+        # of them are one bug with one fix — splitting by trigger would report the same
+        # missing authorization check once per login method.
+        return (clause_id, frozenset(), frozenset())
     effects = frozenset(specs[a].effect.value for _role, a in min_merged)
     triggers = frozenset(a for _role, a in min_merged
                          if specs[a].effect.value in ("raise", "cred"))

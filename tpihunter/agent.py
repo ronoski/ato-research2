@@ -19,6 +19,7 @@ completion. Wire `complete_fn` to a real model to get a live agent.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
@@ -48,11 +49,39 @@ class Attempt:
 #  Situational awareness: turn each probe's raw verdict into signal the agent can
 #  reason over — WHY a probe landed or didn't, WHAT has been covered, and WHEN to stop.
 # --------------------------------------------------------------------------- #
+# A synthesized action name becomes an attribute lookup on the target adapter
+# (`harness.execute_action`), and the name is chosen by a model reading target output. So
+# it is validated the way any untrusted identifier is: a plain lowercase verb, never a
+# dunder or private name that would reach into the adapter's own machinery
+# (`__init__`, `_client`, `close`) instead of naming a flow on the target.
+_ACTION_ID = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+_RESERVED_ACTIONS = frozenset({
+    "arm", "plant", "assess",                      # oracle checkpoints, handled by run_plan
+    "planes", "capture_binding", "present_binding",  # the matrix's binding-lifecycle surface
+    "whoami", "plant_marker", "read_marker", "write_marker",  # the oracle's ground truth
+})
+
+
+def valid_action_id(action_id) -> Optional[str]:
+    """None if `action_id` may name a synthesized action, else why it may not."""
+    if not isinstance(action_id, str) or not _ACTION_ID.match(action_id):
+        return ("action id must be a lowercase identifier of 1-63 chars matching "
+                "[a-z][a-z0-9_]* (no dunder, private or dotted names)")
+    if action_id in _RESERVED_ACTIONS:
+        return f"'{action_id}' is reserved by the harness and cannot be redefined"
+    return None
+
+
 def _outcome_reason(verdict, trace, is_new: bool) -> str:
-    """A single actionable code per probe. `new_bug`/`duplicate` for a takeover; for a SAFE
-    probe, distinguish `unbound_action` (a synthesized verb the target does not implement — stop
-    proposing it), `incomplete` (a step did not execute as posed — reformulate), and `enforced`
-    (the probe ran fully and the target correctly denied cross-access — a real secure result)."""
+    """A single actionable code per probe. `new_bug`/`duplicate` for a takeover; otherwise
+    distinguish `unbound_action` (a synthesized verb the target does not implement — stop
+    proposing it), `incomplete` (a step did not execute as posed — reformulate),
+    `inconclusive` (the probe ran but a control failed or the access was unattributable, so
+    it measured nothing — see `Verdict.withheld`), and `enforced` (the probe ran fully and
+    the target correctly denied cross-access — a real secure result).
+
+    A step that did not execute is reported ahead of the verdict, because it explains *why*
+    the experiment was void, which is what the strategist needs in order to reformulate."""
     sev = verdict.severity.value
     if sev == "takeover":
         return "new_bug" if is_new else "duplicate"
@@ -62,6 +91,8 @@ def _outcome_reason(verdict, trace, is_new: bool) -> str:
         if s.action in ("arm", "plant", "assess") or s.obs is None or s.obs.ok:
             continue
         return "unbound_action" if "no binding" in (s.obs.note or "").lower() else "incomplete"
+    if sev == "inconclusive":
+        return "inconclusive"
     return "enforced"
 
 
@@ -69,6 +100,9 @@ def _fired_signature(merged: Merged, verdict, specs: dict) -> tuple:
     """A cheap distinctness key aligned with dedup's signature — clause + effect-classes +
     trigger verbs — so the loop can tell a genuinely new bug from another path to a known one
     without paying for full causal minimization every round."""
+    from .clauses import BROAD_AUTHORIZATION
+    if verdict.clause_id == BROAD_AUTHORIZATION.id:
+        return (verdict.clause_id, frozenset(), frozenset())   # see dedup._signature
     effects = frozenset(specs[a].effect.value for _r, a in merged if a in specs)
     triggers = frozenset(a for _r, a in merged
                          if a in specs and specs[a].effect.value in ("raise", "cred"))
@@ -211,6 +245,8 @@ An action marked "needs channel control" only works for the victim.
 What you have tried and what happened (the reason in [brackets] tells you what to do next:
 `enforced` = the target is secure there, move on; `unbound_action` = that verb does not exist
 on this target, stop proposing it; `incomplete` = the probe could not run as posed, reformulate;
+`inconclusive` = the probe measured NOTHING (a control failed, or the access could not be
+attributed to your steps) — this is not a secure result, reformulate and try again;
 `duplicate` = you already found that bug another way; `new_bug` = keep pulling that thread):
 {hist}
 
@@ -263,7 +299,7 @@ the victim raise trust or change a credential on the same account."""
             if not isinstance(a, dict):
                 continue
             aid, effect = a.get("id"), a.get("effect")
-            if not aid or effect not in valid:
+            if effect not in valid or valid_action_id(aid) is not None:
                 continue
             requires = tuple(r for r in (a.get("requires") or []) if r in state.specs)
             state.specs[str(aid)] = ActionSpec(str(aid), Effect(effect), requires=requires,
@@ -319,7 +355,7 @@ class AgentHunter:
 
     def __init__(self, adapter_factory: AdapterFactory, attacker: Principal,
                  victim: Principal, email: str, specs: Optional[dict[str, ActionSpec]] = None,
-                 budget: int = 200, confirm: int = 0) -> None:
+                 budget: int = 200, confirm: int = 0, mutate: bool = False) -> None:
         self.adapter_factory = adapter_factory
         self.attacker = attacker
         self.victim = victim
@@ -330,12 +366,15 @@ class AgentHunter:
         # oracle confirmation passes — leave 0 against the deterministic mock, raise it
         # against a flaky/rate-limited real target so a verdict must reproduce before it fires.
         self.confirm = confirm
+        # let the oracle attempt the destructive cross-principal write probe; off by default
+        self.mutate = bool(mutate)
 
     def _run(self, plan):
         a = self.adapter_factory()
         effects = {n: s.effect.value for n, s in self.specs.items()}
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
-                                           effects=effects, confirm=self.confirm))
+                                           effects=effects, confirm=self.confirm,
+                                           resource=self.email, mutate=self.mutate))
 
     def _verdict(self, plan):
         return self._run(plan)[0]

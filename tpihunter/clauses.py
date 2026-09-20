@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class FailureMode(str, Enum):
@@ -22,7 +23,7 @@ class Clause:
     id: str
     title: str
     statement: str
-    mode: FailureMode
+    mode: Optional[FailureMode]   # None for the non-provenance class below
 
 
 CLAUSES: dict[str, Clause] = {
@@ -60,3 +61,27 @@ CLAUSES: dict[str, Clause] = {
         "principal for the target resource (no provenance gap).",
         FailureMode.GAP),
 }
+
+
+# --------------------------------------------------------------------------- #
+#  Outside the taxonomy, on purpose.
+# --------------------------------------------------------------------------- #
+# A takeover is not automatically a provenance failure. If an account that took no part
+# in the probe can read the victim's resource just as well as the attacker can, then
+# `justifies(prov(B), B)` was never what failed — the resource simply is not scoped to
+# its owner. That is an object-level authorization bug: single-principal, reachable, and
+# exactly the class a reachability model already finds. Calling it TPI-1 would ship the
+# wrong remediation and would make the taxonomy unfalsifiable by absorbing its own
+# complement, so it gets its own id and stays OUT of `CLAUSES`.
+#
+# The oracle's bystander control is what tells the two apart (see `oracle._probe_bystander`).
+BROAD_AUTHORIZATION = Clause(
+    "AUTHZ-1", "object-level authorization",
+    "A resource read or write must be scoped to the principal that owns the resource, "
+    "independently of how the requesting session was established.",
+    None)
+
+# Everything a verdict may cite: the TPI clauses plus the non-provenance class. Use
+# `CLAUSES` where the *theory* is meant (the briefing, the paper); use `CATALOG` to
+# resolve whatever id a verdict actually carries.
+CATALOG: dict[str, Clause] = {**CLAUSES, BROAD_AUTHORIZATION.id: BROAD_AUTHORIZATION}

@@ -25,6 +25,8 @@ from enum import Enum
 from itertools import permutations
 from typing import Optional
 
+from .creds import password
+from .creds import recovery_alias as _recovery_alias
 from .harness import Plan, Step
 from .types import Principal
 
@@ -152,8 +154,12 @@ def recovery_alias(role: str) -> str:
     """A recovery/secondary email the given role controls — a *second identifier*, distinct
     from the shared account email. This is what `{alias}` renders to, so a synthesized action
     (e.g. adding a recovery email, then logging in via it) can be driven with an identifier
-    that is not the account's primary email."""
-    return f"{role}.recovery@evil.example"
+    that is not the account's primary email.
+
+    Carries this run's session tag (see `creds`) over a reserved, non-routable domain, so a
+    recovery address the tool attaches to a real account is both attributable to the run
+    that left it there and incapable of receiving mail on someone else's behalf."""
+    return _recovery_alias(role, domain="recovery.example")
 
 
 def _render_param(tmpl: str, *, email: str, role: str) -> str:
@@ -172,9 +178,11 @@ def _to_plan(merged: tuple[tuple[str, str], ...], attacker: Principal,
         p = attacker if role == "attacker" else victim
         params: dict = {"email": email}
         if action in ("register", "login"):
-            params["password"] = "AttackerPw!1" if role == "attacker" else "VictimPw!1"
+            # per-run, per-role and stable within the process: `register` then `login` must
+            # present the same password, and minimization re-runs a plan many times.
+            params["password"] = password(f"{role}:account")
         if action == "reset_consume":
-            params["new_password"] = "AtkReset!9" if role == "attacker" else "VicReset!9"
+            params["new_password"] = password(f"{role}:reset")
         for name, tmpl in specs[action].params:   # synthesized-action params (codes/tokens/aliases)
             params[name] = _render_param(tmpl, email=email, role=role)
         steps.append(Step(p, action, params))

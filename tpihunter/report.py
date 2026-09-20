@@ -17,17 +17,19 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .clauses import CLAUSES
+from .clauses import BROAD_AUTHORIZATION, CATALOG
 from .enumerator import ACTIONS, ActionSpec, build_plan
 from .harness import run_plan
 from .oracle import AtoOracle
+from .redact import redact
 from .types import Principal
 
 RunFn = Callable[[object], tuple]   # plan -> (Verdict, Trace)
 
 _SEVERITY_LABEL = {"takeover": "Critical — account takeover",
                    "suspect": "Suspected cross-principal access",
-                   "safe": "No cross-principal access"}
+                   "safe": "No cross-principal access",
+                   "inconclusive": "Inconclusive — a control failed; the probe measured nothing"}
 
 
 @dataclass
@@ -57,18 +59,27 @@ class Report:
     clause_statement: Optional[str]
     variants_collapsed: int
     mode: str = "confluence"     # "confluence" (two-principal) | "revocation" (own-account)
+    controls: dict = field(default_factory=dict)   # the oracle's control outcomes for this run
 
     # -- rendering ------------------------------------------------------------
+    def _severity_label(self) -> str:
+        if self.clause_id == BROAD_AUTHORIZATION.id:
+            return "Critical — cross-account data access"
+        return _SEVERITY_LABEL.get(self.severity, self.severity)
+
     def title(self) -> str:
         what = self.clause_title or "provenance violation"
         cid = f" ({self.clause_id})" if self.clause_id else ""
+        if self.clause_id == BROAD_AUTHORIZATION.id:
+            # not a takeover of an identity: the resource simply is not scoped to its owner
+            return f"Cross-account data access via {what}{cid}"
         return f"Account takeover via {what}{cid}"
 
     def to_dict(self) -> dict:
         return {
             "title": self.title(),
             "severity": self.severity,
-            "severity_label": _SEVERITY_LABEL.get(self.severity, self.severity),
+            "severity_label": self._severity_label(),
             "confidence": self.confidence,
             "tpi_clause": self.clause_id,
             "clause_title": self.clause_title,
@@ -80,6 +91,7 @@ class Report:
                  "ok": s.ok, "note": s.note, "proof": s.proof, "resolved_identity": s.identity}
                 for s in self.steps],
             "evidence": self.evidence,
+            "controls": self.controls,
             "root_cause": {"laundered_proof": self.laundered_proof,
                            "violated_clause": self.clause_id,
                            "clause_statement": self.clause_statement},
@@ -91,14 +103,23 @@ class Report:
     def _remediation(self) -> Optional[str]:
         if not (self.clause_title and self.clause_statement):
             return None
+        if self.clause_id == BROAD_AUTHORIZATION.id:
+            return (f"Enforce {self.clause_title}: {self.clause_statement} "
+                    "Note the scope of this fix: the identity lifecycle (rebind, revocation, "
+                    "session invalidation) is NOT implicated — a bystander account that took "
+                    "no part in the attack reached the same resource, so changing how "
+                    "sessions are minted or revoked will not close it.")
         return f"Enforce {self.clause_title}: {self.clause_statement}"
 
     def to_markdown(self) -> str:
         L: list[str] = []
         L.append(f"# {self.title()}")
         L.append("")
-        L.append(f"**Severity:** {_SEVERITY_LABEL.get(self.severity, self.severity)}  ")
-        if self.clause_id:
+        L.append(f"**Severity:** {self._severity_label()}  ")
+        if self.clause_id == BROAD_AUTHORIZATION.id:
+            L.append(f"**Class:** NOT a Trust-Provenance Integrity failure — "
+                     f"{self.failure_mode} ({self.clause_id} {self.clause_title})  ")
+        elif self.clause_id:
             L.append(f"**Class:** Trust-Provenance Integrity — {self.failure_mode} "
                      f"({self.clause_id} {self.clause_title})  ")
         L.append(f"**Confidence:** {self.confidence:.2f}  ")
@@ -111,6 +132,10 @@ class Report:
         if self.mode == "revocation":
             L.append("A single account you own. Mint a session, capture its credential, "
                      "perform the mutation, then re-present the captured credential:")
+        elif self.clause_id == BROAD_AUTHORIZATION.id:
+            L.append("Any authenticated account reaches the resource, so the identity "
+                     "sequence below is incidental — it only establishes a resource to read. "
+                     "What proves the bug is the bystander read in the evidence:")
         else:
             L.append("Two principals — **attacker** (does not control the account's "
                      "inbox/IdP) and **victim** (does) — acting over the one shared account:")
@@ -122,11 +147,17 @@ class Report:
             tail = f" — {desc}" if desc else ""
             L.append(f"{s.n}. **{s.principal}** — `{s.action}`{fail}{tail}{proof}")
         L.append("")
-        L.append("## Evidence — why this is a confirmed takeover")
+        L.append("## Evidence — why this is a confirmed takeover"
+                 if self.clause_id != BROAD_AUTHORIZATION.id
+                 else "## Evidence — why this is cross-account access, not laundering")
         if self.evidence:
             if self.mode == "revocation":
                 L.append("The captured credential was checked before and after the mutation, "
                          "with a positive and a negative control on each plane:")
+            elif self.clause_id == BROAD_AUTHORIZATION.id:
+                L.append("A unique canary secret was planted in one account's private "
+                         "resource. It was then read from contexts that should not reach it "
+                         "— including an account that took no part in the attack:")
             else:
                 L.append("A unique canary secret was planted in the victim's private "
                          "resource; the attacker context then:")
@@ -135,6 +166,13 @@ class Report:
         else:
             L.append("_No hard evidence captured._")
         L.append("")
+        if self.controls:
+            L.append("### Controls")
+            L.append("The measurement carried its own controls, so the result above is not a "
+                     "broken-check artefact:")
+            for name, outcome in sorted(self.controls.items()):
+                L.append(f"- `{name}`: {outcome}")
+            L.append("")
         L.append("## Root cause")
         if self.laundered_proof:
             L.append(f"The system laundered a legitimate proof — `{self.laundered_proof}` "
@@ -175,14 +213,17 @@ def build_report(cluster, *, attacker: Principal, victim: Principal, email: str,
     steps = []
     for i, ts in enumerate(trace.steps, 1):
         obs = ts.obs
+        # notes and proofs are whatever the TARGET said; on a real target that routinely
+        # includes a live token or a reset link, and this bundle is written to be pasted
+        # into someone else's ticket. Scrub on the way out.
         steps.append(ReproStep(
             n=i, principal=(ts.principal.name if ts.principal else "-"),
             action=ts.action, ok=bool(obs and obs.ok),
-            note=(obs.note if obs and obs.note else ""),
-            proof=(str(obs.proof) if obs and obs.proof else None),
+            note=redact(obs.note if obs and obs.note else ""),
+            proof=(redact(str(obs.proof)) if obs and obs.proof else None),
             identity=(obs.identity if obs else None)))
 
-    clause = CLAUSES.get(cluster.clause_id) if cluster.clause_id else None
+    clause = CATALOG.get(cluster.clause_id) if cluster.clause_id else None
     return Report(
         clause_id=cluster.clause_id,
         clause_title=(clause.title if clause else None),
@@ -192,12 +233,13 @@ def build_report(cluster, *, attacker: Principal, victim: Principal, email: str,
         email=email,
         minimal_repro=list(merged),
         steps=steps,
-        evidence=[{"kind": e.kind, "detail": e.detail, "strength": e.strength}
+        evidence=[{"kind": e.kind, "detail": redact(e.detail), "strength": e.strength}
                   for e in verdict.evidence],
-        laundered_proof=verdict.laundered_proof or cluster.laundered_proof,
-        narrative=verdict.narrative,
+        laundered_proof=redact(verdict.laundered_proof or cluster.laundered_proof),
+        narrative=redact(verdict.narrative),
         clause_statement=(clause.statement if clause else None),
         variants_collapsed=cluster.size,
+        controls=redact(dict(getattr(verdict, "controls", {}) or {})),
     )
 
 
@@ -233,7 +275,7 @@ def bundle_to_json(reports: list) -> str:
 # --------------------------------------------------------------------------- #
 def revocation_report(cell, *, email: str) -> Report:
     """Assemble a Report from a matrix `CellVerdict` whose survival is SURVIVED or SPLIT."""
-    clause = CLAUSES.get(cell.clause_id) if cell.clause_id else None
+    clause = CATALOG.get(cell.clause_id) if cell.clause_id else None
     kind = getattr(cell, "binding_kind", "session")
     b = "factor" if kind == "factor" else "session"
     mint_step = ("enrol a factor, then capture its id" if kind == "factor"
@@ -258,7 +300,8 @@ def revocation_report(cell, *, email: str) -> Report:
         email=email,
         minimal_repro=[("owner", f"mint:{cell.mint_id}"), ("owner", f"mutate:{cell.mutation_id}")],
         steps=steps,
-        evidence=[{"kind": "binding_survival", "detail": e, "strength": 3} for e in cell.evidence],
+        evidence=[{"kind": "binding_survival", "detail": redact(e), "strength": 3}
+                  for e in cell.evidence],
         laundered_proof=f"{b} minted by '{cell.mint_id}', surviving '{cell.mutation_id}'",
         narrative=(f"A {b} minted before a credential-mutating transition still grants access "
                    f"after it: {cell.note}. {outlives}"),

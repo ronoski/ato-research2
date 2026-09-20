@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .agent import Attempt, Coverage, _fired_signature, _outcome_reason
+from .agent import Attempt, Coverage, _fired_signature, _outcome_reason, valid_action_id
 from .clauses import CLAUSES
 from .dedup import deduplicate
 from .enumerator import ACTIONS, ActionSpec, Effect, is_wellformed, make_candidate, recovery_alias
@@ -28,6 +28,7 @@ from .harness import run_plan
 from .matrix import RevocationMatrix, default_mints, default_mutations
 from .mock_target import MockAdapter
 from .oracle import AtoOracle
+from .redact import redact, untrusted
 from .types import Principal
 
 # Target name -> MockAdapter kwargs. "mock-plane-split" models a multi-plane estate where
@@ -38,6 +39,7 @@ _TARGETS = {
     "mock-plane-split": {"patched": True, "planes": ("auth", "mts"),
                          "revokes": {"logout"}, "plane_local": {"logout"}},
 }
+
 
 
 def _parse_params(params) -> tuple[tuple, Optional[str]]:
@@ -60,7 +62,8 @@ class HuntSession:
     agent can call run_probe repeatedly and then ask for the distinct bugs."""
 
     def __init__(self, target: str = "mock-vulnerable",
-                 email: str = "victim@corp.example", confirm: int = 0) -> None:
+                 email: str = "victim@corp.example", confirm: int = 0,
+                 mutate: bool = False) -> None:
         self.attacker = Principal("attacker")
         self.victim = Principal("victim")
         self.email = email
@@ -72,6 +75,10 @@ class HuntSession:
         # oracle confirmation passes: 0 for the deterministic mock; raise against a flaky
         # real target so a takeover must reproduce across passes before it is reported.
         self.confirm = confirm
+        # the oracle's destructive cross-principal WRITE probe. Off by default: reading the
+        # victim's canary already proves takeover, and writing another principal's private
+        # resource is the one irreversible thing the loop can do to a live target.
+        self.mutate = bool(mutate)
         self.reset(target)
 
     # -- lifecycle ------------------------------------------------------------
@@ -93,8 +100,10 @@ class HuntSession:
                         "Targets: mock-vulnerable, mock-patched, mock-plane-split (the last "
                         "shows a cross-plane SPLIT in revocation_matrix())."}
 
+
     def _adapter(self, control):
         return MockAdapter(control=control, **self._cfg)
+
 
     def register_action(self, action_id: str, effect: str,
                         requires: Optional[list] = None, needs_control: bool = False,
@@ -114,6 +123,11 @@ class HuntSession:
         valid = {e.value for e in Effect}
         if effect not in valid:
             return {"ok": False, "error": f"effect must be one of {sorted(valid)}"}
+        # An action id becomes getattr(adapter, id) at run time, so it is validated before
+        # it is stored — not after it has already been dispatched.
+        id_error = valid_action_id(action_id)
+        if id_error:
+            return {"ok": False, "error": id_error}
         requires = tuple(requires or [])
         for r in requires:
             if r not in self.specs:
@@ -166,6 +180,16 @@ class HuntSession:
                 "test would call fixed. It is own-account and reversible — the safe mode to "
                 "reach for first on a real, authorized target where reading another "
                 "principal's data is not permitted. (reset('mock-plane-split') to see a SPLIT.)",
+                "Read `reason` and `withheld` on every verdict. `inconclusive` means the "
+                "probe measured NOTHING — a control failed (the victim could not plant a "
+                "canary, so there was no ground truth) or the access could not be attributed "
+                "to your steps. It is never evidence that the target is secure; reformulate "
+                "so the victim actually establishes a session before the oracle arms.",
+                "A verdict may cite AUTHZ-1 instead of a TPI clause. That means the "
+                "bystander control fired: an account that took no part in your probe could "
+                "read the victim's resource too, so the access was never provenance-"
+                "specific. It is a real bug (object-level authorization) but not a "
+                "laundering one — do not keep probing identity flows to explain it.",
                 "Call findings() to get the distinct bugs (deduplicated, with minimal repro).",
             ],
             "extending_the_alphabet": (
@@ -199,7 +223,8 @@ class HuntSession:
         adapter = self._adapter(self.control)
         verdict, trace = run_plan(adapter, cand.plan,
                                   AtoOracle(adapter, self.attacker, self.victim,
-                                            effects=self._effects(), confirm=self.confirm))
+                                            effects=self._effects(), confirm=self.confirm,
+                                            resource=self.email, mutate=self.mutate))
         self.probes_run += 1
         unbound = [s.action for s in trace.steps
                    if s.obs and not s.obs.ok and "no binding" in (s.obs.note or "")]
@@ -226,14 +251,29 @@ class HuntSession:
             "evidence": [{"kind": e.kind, "detail": e.detail, "strength": e.strength}
                          for e in verdict.evidence],
             "is_new_takeover": is_new,
+            # set when access evidence existed but a finding was NOT raised, with the reason
+            # (principals_not_independent / attacker_proved_control / no_attacker_action /
+            # canary_not_planted). Read it: it usually means the probe, not the target, is wrong.
+            "withheld": verdict.withheld,
+            # per-probe control outcomes (canary_planted, ref_reads_scoped, ...). A verdict
+            # whose controls did not hold measured nothing.
+            "controls": verdict.controls,
             # what this outcome means for your NEXT probe: new_bug/duplicate/enforced/
-            # unbound_action/incomplete/suspect — see coverage() for the whole map.
+            # unbound_action/incomplete/inconclusive/suspect — see coverage() for the whole map.
             "reason": reason,
             "probes_run": self.probes_run,
         }
         if unbound:
             out["unbound_actions"] = unbound   # registered but the target has no such flow
+        # Everything below leaves for a model's context and, on a live target, is partly
+        # the target's own text. Scrub secrets and neutralise instruction-shaped content.
+        for key in ("narrative", "laundered_proof"):
+            if out.get(key):
+                out[key] = untrusted(redact(out[key]), 400)
+        for e in out["evidence"]:
+            e["detail"] = untrusted(redact(e["detail"]), 240)
         return out
+
 
     def revocation_matrix(self) -> dict:
         """The own-account lifecycle hunt: for each way of minting a session and each
@@ -318,7 +358,8 @@ class HuntSession:
     def _run_pair(self, plan):
         a = self._adapter(self.control)
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
-                                           effects=self._effects(), confirm=self.confirm))
+                                           effects=self._effects(), confirm=self.confirm,
+                                           resource=self.email, mutate=self.mutate))
 
     def _verdict(self, plan):
         return self._run_pair(plan)[0]

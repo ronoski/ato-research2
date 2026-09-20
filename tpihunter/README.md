@@ -52,10 +52,70 @@ principal, and every action is executed *as* a named principal.
    violated.
 
 **False-positive discipline.** The canary is compared by exact match, so reflected
-input or a public field cannot fake a read; identity confluence compares the
-resolved account identity, which a correctly-scoped app never shares between two
-principals. The `patched=True` toggle on the mock is the oracle's own regression
-test — a detector that fired on both the bug and its fix would be worthless.
+input or a public field cannot fake a read. The `patched=True` toggle on the mock is
+the oracle's own regression test — a detector that fired on both the bug and its fix
+would be worthless.
+
+**Controls, because a measurement without controls is an anecdote.** Both directions
+of error are expensive — a false TAKEOVER is a bogus Critical in someone's tracker, a
+false SAFE teaches the agent a surface is secure — so every assessment carries the same
+control discipline the revocation matrix applies per cell:
+
+* *positive*: after planting, the victim must read its own canary back. If it cannot,
+  no ground truth exists, every comparison is vacuous, and the verdict is
+  `INCONCLUSIVE` — never a confident SAFE.
+* *negative*: a reference that names nothing must be refused. A target that answers it
+  with data has an unscoped read endpoint, so a by-reference read proves nothing and
+  that evidence is dropped.
+
+**Attribution, because access is not a finding unless the probe caused it.** Three
+guards gate a non-SAFE severity, all computable from the black-box trace:
+
+* *independence* — if the attacker already resolved to the victim's identity **before
+  the attacker acted**, the principals were never independent (a shared ops mailbox, a
+  family plan, a tenant seat, an SSO org seat, or a harness that gave two principals one
+  context). Void, not a finding.
+* *justification* — if the attacker itself demonstrated control of the contended
+  identifier over a possession channel (IdP, inbox, SMS, TOTP, WebAuthn), its access has
+  justifying provenance. That is a co-owner, not laundering. This is the TPI thesis
+  turned on the oracle's own output.
+* *attribution* — no successful attacker action in the trace means nothing to credit.
+
+A guard never silently rewrites a verdict: `Verdict.withheld` carries the reason code
+and `Verdict.controls` the control outcomes, so an agent and a human both see why.
+`python3 -m tpihunter.safety_demo` runs the three probes that used to grade TAKEOVER at
+0.90–0.99 on no attack at all, beside the real bug still firing at 0.99.
+
+**The diagnosis control — is the access provenance-specific at all?** A takeover is not
+automatically a *provenance* takeover. If the app has a flat IDOR (any session can read
+any resource by reference), the attacker reads the victim's canary and the oracle used to
+report it as **TPI-1, revoke-on-rebind** — a real bug under a clause whose remediation
+cannot close it. So the oracle enrols a **bystander**: a third account that takes no part
+in the probe (`TargetAdapter.enrol_bystander`, optional, verified independent at `arm()`).
+If the bystander can read the victim's canary too, the access was never provenance-
+specific, and the finding is reclassified as `AUTHZ-1` — *object-level authorization*,
+which is deliberately **not** a TPI clause:
+
+```
+TAKEOVER  TPI-1    a genuinely laundering target      bystander=enrolled and independent
+TAKEOVER  AUTHZ-1  a target with flat IDOR instead    bystander=enrolled and independent
+TAKEOVER  TPI-1    ...the same target, control off    bystander=disabled      <- the old answer
+```
+
+`clauses.BROAD_AUTHORIZATION` stays out of `CLAUSES` on purpose. The three failure modes
+(gap / forgery / laundering) are the whole surface over which `justifies(prov(B), B)` can
+be negated; widening them to absorb a plain authorization bug would make the taxonomy
+unfalsifiable by swallowing its own complement. A flat IDOR is single-principal and
+reachability-visible — the class the paper argues TPI is *not* about. Use `CLAUSES` where
+the theory is meant, `CATALOG` to resolve whatever id a verdict carries. Without an
+adapter that implements `enrol_bystander` the oracle still detects the takeover; it just
+records `controls["bystander"] = "unavailable"` and cannot discriminate.
+
+**Mutation is opt-in.** Proving the attacker can *write* the victim's resource is the
+strongest evidence there is and the only destructive thing the oracle does, so it is off
+by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a value that is
+never the canary, and the restore is verified — a failure is recorded in
+`Verdict.controls`, not left silently corrupting the target.
 
 ## The revocation matrix (the second mode)
 
@@ -108,7 +168,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | file | role |
 |------|------|
 | `types.py` | principals, identifiers, channels, proof events, observations |
-| `clauses.py` | the TPI invariant clauses a verdict can cite |
+| `clauses.py` | the TPI invariant clauses a verdict can cite, plus `BROAD_AUTHORIZATION` (`AUTHZ-1`) — deliberately outside the taxonomy |
 | `channels.py` | out-of-band providers (email inbox, TOTP) behind interfaces |
 | `adapter.py` | `TargetAdapter` protocol (alphabet Σ) + the `Trace` it records |
 | `oracle.py` | `AtoOracle` — the verdict engine |
@@ -127,6 +187,9 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
+| `policy.py` | **rules of engagement as data** — `EngagementPolicy` + `guard()`: scope allowlists, destructive-action gates, budget, dry run, audit log |
+| `redact.py` | secret scrubbing for everything the tool emits (reports, audit trail) |
+| `creds.py` | per-run credentials and identifiers — never literals in source |
 | `flaky.py` | `FlakyAdapter` — drops the attacker's reads (seeded); exercises oracle confirmation |
 | `demo.py` | end-to-end self-test (one hand-written probe) |
 | `enum_demo.py` | self-test of the enumerator (zero hand-written probes) |
@@ -140,12 +203,40 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `retry_demo.py` | oracle confirmation — a flaky target can't flip the verdict (M13) |
 | `alias_demo.py` | richer params — drive a flow that needs a second identifier (M14) |
 | `coverage_demo.py` | agent situational awareness — reason codes, coverage map, patience-stop (M16) |
+| `safety_demo.py` | the oracle's controls and the engagement policy — what stops this doing the wrong thing to a real system |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
 ## Hunting a real target
 
-Implement one `TargetAdapter` (see `adapter.py`). The only real work:
+**First, the engagement.** Rules of engagement live in data and are enforced per action,
+so the common accidents are impossible rather than unlikely:
+
+```python
+from tpihunter.policy import EngagementPolicy, guard, policy_report
+
+policy = EngagementPolicy(
+    name="acme-bugbounty",
+    authorized_by="security@acme.example, ticket SEC-1421, 2026-09-20",  # empty => refuse everything
+    identifiers={"pentest-a@acme.example", "pentest-v@acme.example"},    # the ONLY accounts in scope
+    hosts={"staging.acme.example"},                                      # the ONLY hosts in scope
+    allow_credential_change=False,      # resets / email changes / factor enrolment
+    allow_cross_principal_write=False,  # the oracle's destructive write probe
+    max_actions=500,                    # hard cap, fails closed
+    min_interval=0.5,                   # be a good citizen
+    dry_run=True,                       # review the run before it is a run
+)
+adapter = guard(AcmeAdapter(...), policy)     # every action now checked + audited
+...
+print(policy_report(adapter))                 # what the run actually did
+```
+
+An out-of-scope identifier raises `ScopeViolation` — it is never handled by continuing.
+A spent budget raises `BudgetExhausted`, so a truncated run is never mistaken for a
+clean one. `policy.check_url()` is the check a redirect or an emailed link needs before
+you follow it. Every action lands in an audit trail with credentials redacted.
+
+**Then the adapter.** Implement one `TargetAdapter` (see `adapter.py`). The only real work:
 
 - **Per-principal transport.** One `httpx.Client` (its own cookie jar / token) per
   principal, so two contexts run truly independently.
@@ -159,6 +250,11 @@ Implement one `TargetAdapter` (see `adapter.py`). The only real work:
   ground truth the oracle needs.
 
 Then reuse `AtoOracle`, `run_plan`, and the plans in `probes.py` unchanged.
+
+Two things the adapter author owns, because nothing outside the adapter can enforce
+them: **one transport per principal** (separate cookie jars — two principals sharing a
+context voids every verdict, and the oracle's independence control will say so), and
+**own accounts only** (the oracle plants a canary in the victim's private resource).
 
 ## Generating probes
 

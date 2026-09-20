@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
+from .creds import password
 from .harness import execute_action
 from .types import Principal
 
@@ -99,12 +100,12 @@ def default_mints(email: str) -> list[MintSpec]:
     the session that enrolled it is gone, so a mutation that fails to revoke it is the
     durable-takeover bug."""
     return [
-        MintSpec("password_session", (("register", {"email": email, "password": "OwnPw!1"}),),
+        MintSpec("password_session", (("register", {"email": email, "password": password("owner:account")}),),
                  "a password session (register)", kind="session"),
         MintSpec("sso_session", (("sso_login", {"email": email}),),
                  "a federated session (SSO)", kind="session"),
         MintSpec("passkey_factor",
-                 (("register", {"email": email, "password": "OwnPw!1"}), ("enroll_factor", {})),
+                 (("register", {"email": email, "password": password("owner:account")}), ("enroll_factor", {})),
                  "an enrolled passkey/biometric factor", kind="factor"),
     ]
 
@@ -117,7 +118,7 @@ def default_mutations(email: str) -> list[MutationSpec]:
                      revokes_kinds=frozenset({"session"})),
         MutationSpec("password_reset",
                      (("reset_request", {"email": email}),
-                      ("reset_consume", {"email": email, "new_password": "NewPw!2"})),
+                      ("reset_consume", {"email": email, "new_password": password("owner:reset")})),
                      "password reset", revokes_kinds=frozenset({"session", "factor"})),
         MutationSpec("email_change", (("email_change", {"new_email": "rebound@corp.example"}),),
                      "email change", revokes_kinds=frozenset({"session"})),

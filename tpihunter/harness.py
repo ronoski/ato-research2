@@ -19,16 +19,20 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .adapter import Trace
+from .creds import fallback_password
 from .oracle import AtoOracle, Verdict
 from .types import Observation, Principal
 
-# alphabet action -> how to invoke it on the adapter with a step's params
+# alphabet action -> how to invoke it on the adapter with a step's params.
+# Password fallbacks are generated per process (see `creds`), never literals: against a
+# real target a literal in this file would leave the accounts under test holding a
+# credential published in the repository.
 _DISPATCH = {
-    "register":       lambda a, p, prm: a.register(p, prm["email"], prm.get("password", "Seed!pw01")),
+    "register":       lambda a, p, prm: a.register(p, prm["email"], prm.get("password") or fallback_password("seed")),
     "login":          lambda a, p, prm: a.login(p, prm["email"], prm["password"]),
     "sso_login":      lambda a, p, prm: a.sso_login(p, prm["email"]),
     "reset_request":  lambda a, p, prm: a.reset_request(p, prm["email"]),
-    "reset_consume":  lambda a, p, prm: a.reset_consume(p, prm["email"], prm.get("new_password", "Pwn!pw12345")),
+    "reset_consume":  lambda a, p, prm: a.reset_consume(p, prm["email"], prm.get("new_password") or fallback_password("reset")),
     "logout":         lambda a, p, prm: a.logout(p),
     "enroll_factor":  lambda a, p, prm: a.enroll_factor(p),
     "email_change":   lambda a, p, prm: a.email_change(p, prm.get("new_email", "changed@corp.example")),
@@ -49,12 +53,21 @@ def execute_action(adapter, principal, action: str, params: dict) -> Observation
     # A synthesized action gets only the params its method actually accepts — the implicit
     # {email} every step carries is dropped for a verb that doesn't take it (e.g. add_alias
     # takes `alias`, not `email`), so declared non-email params (codes/tokens/aliases) work.
+    if not callable(method):
+        return Observation(False, note=f"action '{action}' has no binding on this target")
     sig = inspect.signature(method)
     if any(p.kind is p.VAR_KEYWORD for p in sig.parameters.values()):
         kw = params
     else:
         kw = {k: v for k, v in params.items() if k in sig.parameters}
-    return method(principal, **kw)
+    result = method(principal, **kw)
+    if not isinstance(result, Observation):
+        # A synthesized action can name any adapter attribute; one that is not part of the
+        # alphabet may return anything at all. Contain it here rather than let a foreign
+        # value propagate into the trace and fail somewhere far from the cause.
+        return Observation(False, note=f"action '{action}' is not an alphabet action on "
+                                       f"this target (returned {type(result).__name__})")
+    return result
 
 
 @dataclass
@@ -77,7 +90,7 @@ def run_plan(adapter, plan: Plan, oracle: AtoOracle) -> tuple[Verdict, Trace]:
     verdict: Optional[Verdict] = None
     for s in plan.steps:
         if s.action == "arm":
-            oracle.arm()
+            oracle.arm(trace)   # the trace tells the oracle whether the attacker has acted yet
         elif s.action == "plant":
             oracle.plant()
         elif s.action == "assess":
@@ -85,5 +98,8 @@ def run_plan(adapter, plan: Plan, oracle: AtoOracle) -> tuple[Verdict, Trace]:
         else:
             obs = execute_action(adapter, s.principal, s.action, s.params)
             trace.record(s.principal, s.action, s.params, obs)
-    assert verdict is not None, "plan must contain an 'assess' checkpoint"
+    if verdict is None:
+        # Not an assert: `python -O` strips asserts, and a plan that silently returns no
+        # verdict would surface as an unexplained crash in a hunt loop.
+        raise ValueError(f"plan {plan.name!r} must contain an 'assess' checkpoint")
     return verdict, trace

@@ -16,6 +16,8 @@ import secrets
 from typing import Optional
 
 from .channels import InMemoryInbox
+from .creds import password as _password
+from .creds import session_id
 from .types import Channel, Identifier, Observation, Principal, ProofEvent
 
 
@@ -244,7 +246,11 @@ class MockAdapter:
     def __init__(self, patched: bool = False, control: Optional[dict[str, set[str]]] = None,
                  revokes: Optional[set] = None, planes: Optional[tuple] = None,
                  plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None,
-                 revoke_factors: Optional[set] = None, revoke_aliases: bool = False) -> None:
+                 revoke_factors: Optional[set] = None, revoke_aliases: bool = False,
+                 bystander_email: Optional[str] = None) -> None:
+        # the account the oracle's bystander control runs on — separate from the contended
+        # one, and tagged with this run so an artefact it leaves is attributable
+        self.bystander_email = bystander_email or f"bystander-{session_id()}@corp.example"
         self.t = VulnerableTarget(patched=patched, revokes=revokes, planes=planes,
                                   plane_local=plane_local, mutation_planes=mutation_planes,
                                   revoke_factors=revoke_factors, revoke_aliases=revoke_aliases)
@@ -357,6 +363,20 @@ class MockAdapter:
         aid = self.t.change_email(token, new_email)
         return Observation(aid is not None, identity=new_email,
                            note=f"{p} changed the account email to {new_email}")
+
+    def enrol_bystander(self, p: Principal) -> Observation:
+        """Authenticate `p` on a fresh account of its own — an uninvolved third party.
+
+        A real adapter logs in the engagement's third test account instead of creating one,
+        and that account's identifier belongs in the policy allowlist."""
+        email = self.bystander_email
+        tok, aid = self.t.register(email, _password("bystander:account"))
+        if tok is None:
+            tok, aid = self.t.login(email, _password("bystander:account"))
+        if tok:
+            self.sess[p.name] = tok
+        return Observation(tok is not None, identity=aid,
+                           note=f"{p} enrolled as an uninvolved bystander on {email}")
 
     # -- oracle surface -------------------------------------------------------
     def whoami(self, p: Principal) -> Observation:
