@@ -290,6 +290,35 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## Why the witness must not be the page (a live TPI-1 pre-claim)
+
+Pre-account-hijacking is this project's founding shape: an attacker binds an identifier
+before the victim claims it, and the binding is never revoked. Tested live at the
+registration door — submit a registration for an address already bound to a live account:
+
+```
+after submit: /register/pincode
+page:         "A verification code has been sent to the e-mail address you registered."
+```
+
+On the page alone that is a finding: the surface accepted a registration for someone
+else's address and says it mailed a code. The mailbox says otherwise:
+
+```
+[0570] E-mail address verification      <- the owner's OWN registration, earlier
+       E-mail address already registered <- what the pre-claim actually generated
+```
+
+**No code was issued.** The pincode page is a deliberate decoy — identical UI whether or
+not the address exists, which denies account enumeration — and the address owner is told
+someone tried to register with it. Correct behaviour, and invisible to any check that
+reads the response.
+
+The lesson generalises past this clause: a witness must be observed somewhere the target
+does not control the narrative. Here that is an out-of-band mailbox. Where a mode has to
+trust the response — `audience.Presentation.raw`, `scopes` field witnesses — the controls
+exist to stop the *caller* reading into it what the server never said.
+
 ## The audience matrix (the seventh mode)
 
 Every mode before this one stayed inside one host. An account takeover rarely does: the
