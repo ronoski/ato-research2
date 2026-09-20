@@ -13,6 +13,7 @@ fired on both would be worthless.
 from __future__ import annotations
 
 import secrets
+import time
 from typing import Optional
 
 from .channels import InMemoryInbox
@@ -42,8 +43,13 @@ class VulnerableTarget:
     def __init__(self, patched: bool = False, revokes: Optional[set] = None,
                  planes: Optional[tuple] = None, plane_local: Optional[set] = None,
                  mutation_planes: Optional[dict] = None, revoke_factors: Optional[set] = None,
-                 revoke_aliases: bool = False) -> None:
+                 revoke_aliases: bool = False, racy_reset: float = 0.0) -> None:
         self.patched = patched
+        # A check-then-act window in reset_consume. Zero (the default) consumes the token
+        # atomically; a positive value opens the window a token double-spend needs. This is
+        # the race mode's discriminator, the role `patched` plays for the oracle: a detector
+        # that fired on both the bug and its fix would be worthless.
+        self.racy_reset = float(racy_reset)
         # Whether the revoke-on-rebind fix (patched sso_login) ALSO drops recovery emails an
         # attacker added before the rebind. Default False models the common gap: the fix
         # revoked sessions/password but forgot the parallel recovery-email data, so an
@@ -207,7 +213,14 @@ class VulnerableTarget:
         return tok
 
     def reset_consume(self, token: str, new_password: str) -> tuple[Optional[str], Optional[str]]:
-        rec = self.reset_tokens.pop(token, None)
+        if self.racy_reset > 0:
+            rec = self.reset_tokens.get(token)          # CHECK
+            if rec is None:
+                return None, None
+            time.sleep(self.racy_reset)                 # ...the window...
+            self.reset_tokens.pop(token, None)          # ACT
+        else:
+            rec = self.reset_tokens.pop(token, None)    # atomic
         if rec is None:
             return None, None
         aid, _email_at_request = rec
@@ -252,13 +265,14 @@ class MockAdapter:
                  revokes: Optional[set] = None, planes: Optional[tuple] = None,
                  plane_local: Optional[set] = None, mutation_planes: Optional[dict] = None,
                  revoke_factors: Optional[set] = None, revoke_aliases: bool = False,
-                 bystander_email: Optional[str] = None) -> None:
+                 bystander_email: Optional[str] = None, racy_reset: float = 0.0) -> None:
         # the account the oracle's bystander control runs on — separate from the contended
         # one, and tagged with this run so an artefact it leaves is attributable
         self.bystander_email = bystander_email or f"bystander-{session_id()}@corp.example"
         self.t = VulnerableTarget(patched=patched, revokes=revokes, planes=planes,
                                   plane_local=plane_local, mutation_planes=mutation_planes,
-                                  revoke_factors=revoke_factors, revoke_aliases=revoke_aliases)
+                                  revoke_factors=revoke_factors, revoke_aliases=revoke_aliases,
+                                  racy_reset=racy_reset)
         self.inbox = InMemoryInbox()
         self.factor_of: dict[str, Optional[str]] = {}   # principal -> its most-recent factor id
         self.sess: dict[str, Optional[str]] = {}     # principal name -> session token

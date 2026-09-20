@@ -2403,5 +2403,171 @@ class TestBoundedProbe(unittest.TestCase):
         self.assertEqual(len(res.interesting()), 1)
 
 
+class TestRaceMode(unittest.TestCase):
+    """Concurrency: the failure the engine could not express though the theory names it.
+    A single-use proof consumed twice is two bindings from one proof — but run_plan walks
+    steps in order, so the only interleaving it can build is an ordering, and token
+    double-spend is not an ordering."""
+
+    class _Store:
+        """A single-use token store. `window` inserts a check-then-act gap; with a lock
+        the same code is atomic — the two differ only in whether the gap is guarded."""
+
+        def __init__(self, window=0.0, atomic=False):
+            import threading
+            self.window, self.atomic = window, threading.Lock() if atomic else None
+            self.tokens = set()
+
+        def mint(self, tok):
+            self.tokens.add(tok)
+
+        def consume(self, tok):
+            import time
+            from tpihunter.types import Observation
+            if self.atomic:
+                with self.atomic:
+                    if tok not in self.tokens:
+                        return Observation(False, note="spent")
+                    time.sleep(self.window)
+                    self.tokens.discard(tok)
+                    return Observation(True)
+            if tok not in self.tokens:                 # CHECK
+                return Observation(False, note="spent")
+            time.sleep(self.window)                    # ...the window...
+            self.tokens.discard(tok)                   # ACT
+            return Observation(True)
+
+    SPEC = None
+
+    def _spec(self, **kw):
+        from tpihunter.race import RaceSpec
+        base = dict(name="single-use token", parallelism=8,
+                    invariant="a single-use token is consumed at most once")
+        base.update(kw)
+        return RaceSpec(**base)
+
+    def _run(self, window, atomic, **kw):
+        from tpihunter.race import run_race
+        def prepare():
+            st = self._Store(window=window, atomic=atomic)
+            st.mint("T")
+            return st
+        return run_race(self._spec(**kw), prepare=prepare,
+                        fire=lambda st, i: st.consume("T"),
+                        negative=lambda st, i: st.consume("NEVER-VALID"))
+
+    def test_a_check_then_act_window_is_caught(self):
+        from tpihunter.race import RaceOutcome
+        v = self._run(window=0.05, atomic=False)
+        self.assertEqual(v.outcome, RaceOutcome.RACE, v.note)
+        self.assertGreater(v.concurrent_successes, 1)
+        self.assertEqual(v.sequential_successes, 1)     # it IS single-use in sequence
+        self.assertTrue(v.controls["overlapped"])
+        self.assertTrue(v.is_finding)
+        self.assertIn("Invariant broken", v.render())
+
+    def test_the_same_code_with_the_window_guarded_is_not_a_finding(self):
+        from tpihunter.race import RaceOutcome
+        v = self._run(window=0.05, atomic=True)
+        self.assertEqual(v.outcome, RaceOutcome.ATOMIC, v.note)
+        self.assertEqual(v.concurrent_successes, 1)
+        self.assertFalse(v.is_finding)
+
+    def test_an_action_that_is_not_single_use_in_sequence_measures_nothing(self):
+        from tpihunter.race import RaceOutcome, RaceSpec, run_race
+        from tpihunter.types import Observation
+        v = run_race(self._spec(), prepare=lambda: None,
+                     fire=lambda ctx, i: Observation(True))      # always succeeds
+        self.assertEqual(v.outcome, RaceOutcome.INCONCLUSIVE)
+        self.assertEqual(v.sequential_successes, 2)
+        self.assertIn("not single-use even without concurrency", v.note)
+
+    def test_an_endpoint_that_accepts_anything_is_caught_by_the_negative_control(self):
+        from tpihunter.race import RaceOutcome, run_race
+        from tpihunter.types import Observation
+        calls = {"n": 0}
+        def fire(ctx, i):
+            calls["n"] += 1
+            return Observation(calls["n"] == 1)          # single-use in sequence
+        v = run_race(self._spec(), prepare=lambda: None, fire=fire,
+                     negative=lambda ctx, i: Observation(True))   # accepts anything
+        self.assertEqual(v.outcome, RaceOutcome.INCONCLUSIVE)
+        self.assertIn("accepts anything", v.note)
+
+    def test_attempts_that_serialise_are_not_reported_as_no_race(self):
+        # the false NEGATIVE this mode is most prone to: a lock, a pool or a rate limiter
+        # serialises the requests and "nothing raced" looks like "nothing to find"
+        from tpihunter.race import RaceOutcome, RaceSpec, run_race
+        from tpihunter.types import Observation
+        import threading
+        gate = threading.Lock()
+        state = {"spent": False, "seq": 0}
+        def fire(ctx, i):
+            with gate:                                   # forces strict serialisation
+                if state["spent"]:
+                    return Observation(False)
+                state["spent"] = True
+                return Observation(True)
+        def prepare():
+            state["spent"] = False
+            return None
+        v = run_race(RaceSpec("serialised", invariant="x", parallelism=4),
+                     prepare=prepare, fire=fire)
+        self.assertIn(v.outcome, (RaceOutcome.ATOMIC, RaceOutcome.INCONCLUSIVE))
+        if v.outcome is RaceOutcome.INCONCLUSIVE:
+            self.assertIn("serialised", v.note)
+
+    def test_over_http_the_same_probe_discriminates_racy_from_atomic(self):
+        """The discriminator, over real sockets and a threaded server: identical probe,
+        opposite verdicts. A detector that fired on both would be worthless."""
+        import json as _j, urllib.error, urllib.request
+        from tpihunter.http_mock import VICTIM_EMAIL, serve
+        from tpihunter.race import RaceOutcome, RaceSpec, run_race
+        from tpihunter.types import Observation
+
+        def post(url, path, body):
+            req = urllib.request.Request(url + path, _j.dumps(body).encode(),
+                                         {"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        def verdict(racy):
+            with serve(patched=False, racy_reset=racy) as url:
+                def prepare():
+                    post(url, "/api/signup", {"email": VICTIM_EMAIL, "password": "Pw!1"})
+                    post(url, "/api/reset", {"email": VICTIM_EMAIL})
+                    link = _j.load(urllib.request.urlopen(
+                        url + "/testing/inbox?address=" + VICTIM_EMAIL, timeout=10))["link"]
+                    return link.split("token=")[-1]
+                return run_race(
+                    RaceSpec("reset token double-spend", parallelism=8,
+                             invariant="a single-use reset token is consumed at most once"),
+                    prepare=prepare,
+                    fire=lambda tok, i: Observation(
+                        post(url, "/api/reset/confirm", {"token": tok, "password": f"N!{i}"}) == 200),
+                    negative=lambda tok, i: Observation(
+                        post(url, "/api/reset/confirm", {"token": "never", "password": "x"}) == 200))
+
+        racy = verdict(0.08)
+        self.assertEqual(racy.outcome, RaceOutcome.RACE, racy.note)
+        self.assertGreater(racy.concurrent_successes, 1)
+        self.assertGreaterEqual(racy.controls["max_in_flight"], 2)
+
+        clean = verdict(0.0)
+        self.assertEqual(clean.outcome, RaceOutcome.ATOMIC, clean.note)
+        self.assertEqual(clean.concurrent_successes, 1)
+        self.assertEqual(clean.sequential_successes, 1)   # single-use either way
+
+    def test_overlap_is_measured_from_the_windows_not_assumed(self):
+        from tpihunter.race import Attempt, max_overlap
+        self.assertEqual(max_overlap([Attempt(0, True, 0.0, 1.0),
+                                      Attempt(1, False, 0.5, 1.5)]), 2)
+        self.assertEqual(max_overlap([Attempt(0, True, 0.0, 1.0),
+                                      Attempt(1, False, 1.1, 2.0)]), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

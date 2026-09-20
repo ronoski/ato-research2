@@ -12,6 +12,7 @@ The pieces:
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
   browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
+  race         concurrency: the same action fired N times at once, with overlap measured
   identifiers  identifier-equivalence probing — the takeover class TPI cannot represent
   probe        bounded, hypothesis-led enumeration (the legitimate half of "try things")
   profile      TargetProfile: a real target described as data, not code
@@ -39,6 +40,7 @@ from .h1_scope import from_hackerone_csv, parse_instruction
 from .identifiers import Finding as IdentifierFinding
 from .identifiers import Variant, probe_identifier, variants
 from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
+from .race import RaceOutcome, RaceSpec, RaceVerdict, max_overlap, run_race
 from .live import LiveAdapter, ScopedTransport, live_adapter
 from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
                      PolicyViolation, ScopeViolation, for_mock, guard, policy_report)
@@ -73,6 +75,7 @@ __all__ = [
     "playwright_driver_factory",
     "probe_identifier", "variants", "Variant", "IdentifierFinding",
     "Budget", "Candidate", "run_probe", "ProbeResult", "Halted",
+    "RaceSpec", "RaceVerdict", "RaceOutcome", "run_race", "max_overlap",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",

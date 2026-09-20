@@ -138,6 +138,30 @@ by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a valu
 never the canary, and the restore is verified — a failure is recorded in
 `Verdict.controls`, not left silently corrupting the target.
 
+## Concurrency (the fourth mode)
+
+A single-use proof consumed twice is two bindings from one proof — a provenance violation
+the theory has always named, and one the **engine** could not express. `run_plan` walks
+steps in order, so the only interleaving it builds is an ordering, and token double-spend
+is not an ordering. It is two requests inside one check-then-act window, which no
+permutation of sequential steps reaches.
+
+`race.py` fires the same action N times at once and asks whether an invariant that holds
+sequentially still holds concurrently. Three controls, because a race is easy to fake in
+both directions:
+
+* **sequential** — fired twice in sequence, exactly one must succeed. Two, and the action
+  was never single-use and a race would prove nothing; none, and the setup is broken.
+* **overlap** — the attempts must actually have overlapped, measured from the recorded
+  windows. Requests that serialise behind a pool, a lock or a rate limiter are a
+  sequential run in costume, and "no race found" from one is a **false negative**.
+* **negative** — a never-valid input must fail in every racer, so "two succeeded" cannot
+  be an endpoint that accepts anything.
+
+Self-validating like the rest: `MockAdapter(racy_reset=0.08)` opens the window,
+`racy_reset=0` closes it, and the same probe over real sockets returns `RACE` on one and
+`ATOMIC` on the other.
+
 ## Outside the state machine (the third mode)
 
 TPI models an identifier as an **atom**. Every question it can ask is about transitions
