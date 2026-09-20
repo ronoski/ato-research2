@@ -276,9 +276,31 @@ id_token     *e56201e414c97a10/token       refused        -
 ```
 
 `api.accounts.nintendo.com` refuses an `id_token` presented as a bearer credential — the
-dangerous direction of type confusion, and it is closed. The inconclusive cells are a
-*testability* limit, not a clean bill: that endpoint cannot witness a subject for an
-account with no shop record, so nothing it returns can be judged.
+dangerous direction of type confusion, and it is closed.
+
+Giving the account a shop record made the shop cells judgeable, and three OIDC clients
+were recovered from in-scope properties (eShop/play, www/parental-controls, museum
+tickets), which is what a real cross-audience test needs:
+
+```
+token                presented to             result     subject
+eshop-id_token       e56201e414c97a10         accepted   d0f0e3efa65ac9fa
+museum-id_token     *e56201e414c97a10         refused    -
+museum-access_token *e56201e414c97a10         refused    -
+[enforced] accepted a token minted for it and refused the foreign-aud ones for the
+           same subject — `aud` is checked here
+```
+
+Two tokens for one subject, minted seconds apart, differing only in which client issued
+them: the foreign ones are refused. One laxity remains — `shopLogin(idToken:)` accepts an
+`access_token` (`typ=token`) — but it is confined to the *same* audience, whose two token
+types are issued together in one fragment, so holding either already implies the other.
+
+That last table is also why the mode grew `enforced`. A refusal is only silence when
+nothing is known to work at that audience; when a native token was accepted in the same
+run, refusing a foreign one is *positive evidence* that `aud` is checked. Reporting it as
+a withheld verdict would file a tested-and-sound surface under "could not tell", and those
+are different claims.
 
 ## The step-up matrix (the sixth mode)
 

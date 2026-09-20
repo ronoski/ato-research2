@@ -3099,6 +3099,26 @@ class TestAudienceMatrix(unittest.TestCase):
                                 present, check_tamper=False)
         self.assertEqual(len([f for f in r.findings if f.clause_id == "TPI-2"]), 1)
 
+    def test_a_demonstrably_live_audience_refusing_a_foreign_token_is_recorded(self):
+        """A clean surface should read as tested, not as silence. When an audience accepts
+        its own token and refuses a foreign-aud one for the same subject in the same run,
+        that is positive evidence `aud` is enforced."""
+        from tpihunter.audience import (Acceptance, Audience, NEVER_ISSUED, Presentation,
+                                        Token, run_audience_matrix)
+        native = Token("native", "a.b.c", "clientA", "user-1")
+        foreign = Token("foreign", "d.e.f", "clientZ", "user-1")
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401", raw="no")
+            if tok.aud == aud.id:
+                return Presentation(Acceptance.ACCEPTED, "user-1", "200", raw='{"id":"user-1"}')
+            return Presentation(Acceptance.REFUSED, None, "401", raw="no")
+        r = run_audience_matrix([native, foreign], [Audience("clientA")], present,
+                                check_tamper=False)
+        self.assertEqual([f for f in r.findings if f.clause_id == "TPI-2"], [])
+        self.assertTrue(any("`aud` is checked here" in e for e in r.enforced))
+        self.assertIn("[enforced]", r.render())
+
     def test_tamper_changes_only_the_signature(self):
         from tpihunter.audience import tamper
         t = "aaa.bbb.ccc"

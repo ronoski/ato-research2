@@ -158,6 +158,7 @@ class AudienceResult:
     cells: list = field(default_factory=list)
     findings: list = field(default_factory=list)
     withheld: list = field(default_factory=list)
+    enforced: list = field(default_factory=list)   # audiences shown to check `aud`
 
     def render(self) -> str:
         w = max([len(c.token.id) for c in self.cells] + [8])
@@ -168,9 +169,11 @@ class AudienceResult:
                        f"{c.acceptance.value:<14} {c.subject or '-'}")
         for f in self.findings:
             out.append("\n" + f.render())
+        for note in self.enforced:
+            out.append(f"\n[enforced] {note}")
         for note in self.withheld:
             out.append(f"\n[withheld] {note}")
-        if not self.findings and not self.withheld:
+        if not self.findings and not self.withheld and not self.enforced:
             out.append("\nno finding: every audience took only the tokens minted for it")
         return "\n".join(out)
 
@@ -248,6 +251,26 @@ def run_audience_matrix(tokens: list, audiences: list,
                     + (" — the token's own subject, so the proof crossed an audience "
                        "boundary it was never pinned to" if same else
                        f" — which is NOT the token's subject ({tok.subject!r})")))
+
+    # A refusal is only silence if nothing is known to work there. When an audience
+    # ACCEPTED a native token in the same run, that audience is demonstrably live, so
+    # refusing a foreign-aud token of the same subject is positive evidence that `aud`
+    # is enforced — worth recording, not withholding. Otherwise a sound surface reads as
+    # an absence of results, and "we tested and it holds" is a different claim from
+    # "we could not tell".
+    for aud in audiences:
+        native_ok = any(c.acceptance is Acceptance.ACCEPTED and not c.cross
+                        for c in res.cells if c.audience.id == aud.id)
+        if not native_ok or not sound.get(aud.id):
+            continue
+        foreign_refused = [c.token.id for c in res.cells
+                           if c.audience.id == aud.id and c.cross
+                           and c.acceptance is Acceptance.REFUSED]
+        if foreign_refused:
+            res.enforced.append(
+                f"'{aud.id}' accepted a token minted for it and refused "
+                f"{', '.join(sorted(foreign_refused))} for the same subject — `aud` is "
+                f"checked here")
 
     if check_tamper:
         for aud in audiences:
