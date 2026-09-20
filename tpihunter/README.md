@@ -290,6 +290,43 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## A passkey also survives — and that one is NOT a finding
+
+The same test applied to a passkey gives a louder-looking result and a weaker one, and
+the difference is worth writing down because the temptation to report it is real.
+
+```
+enrol passkey (session only, inside the freshness window)
+change password        witness: "A new password has been set."
+NEW browser, 0 cookies, only the captured private key:
+    POST /api/passkey/authentication  x2
+    signCount 1 -> 3        (the credential really performed assertions)
+    landed /, signed in as the account owner
+```
+
+A permanent login credential minted before the credential change still authenticates after
+it, with no password and no prior state. On its face that is worse than the token result:
+a token dies in fifteen minutes, a passkey does not.
+
+It is still not a finding, for two reasons that the token result does not share:
+
+* **The owner can see it.** `isSetPasskey` is true on their own settings page, the passkey
+  page lists "Registered Passkeys", and it offers delete.
+* **It is industry-standard behaviour.** Passkeys are independent authenticators; Google,
+  Apple and Microsoft all retain them across a password change, deliberately, because a
+  passkey is stronger than the password being rotated.
+
+So the honest split is about *visibility and control*, not about survival:
+
+| binding | visible to owner | revocable by owner | survives password change | verdict |
+|---|---|---|---|---|
+| OIDC access token | no | no | yes (~15 min) | **finding** |
+| passkey | yes | yes | yes (permanent) | by design |
+
+The token is the finding precisely because the user has no way to see it and no way to
+kill it. The passkey looks more severe and is less so. A hunt that ranked these by
+apparent impact would report the wrong one.
+
 ## TPI-4 measured live: a password change revokes the session, not the token
 
 The sharper half of the pair, because a password change is *the* action a compromised
