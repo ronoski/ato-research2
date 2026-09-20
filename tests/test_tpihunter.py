@@ -2728,9 +2728,18 @@ class TestSurfaceTriage(unittest.TestCase):
         self.assertTrue(any("own-account modes only" in x for x in one.signals))
 
     def test_an_available_enrolment_path_beats_no_principal_at_all(self):
-        enrol = self._s(host="a.example", status=200, can_enrol=True)
-        none_ = self._s(host="b.example", status=200, can_enrol=False)
+        # the surfaces must carry positive exploitability first: the gate SCALES value,
+        # and a surface with none to scale cannot show the difference
+        enrol = self._s(host="a.example.net", status=401, sets_cookie=("S",), can_enrol=True)
+        none_ = self._s(host="b.example.net", status=401, sets_cookie=("S",), can_enrol=False)
         self.assertGreater(enrol.score, none_.score)
+        self.assertTrue(any("enrolment is available" in x for x in enrol.signals))
+
+    def test_an_unattractive_surface_is_not_rescued_by_the_gate(self):
+        # multiplying a NEGATIVE score by a smaller factor makes it larger; the gate
+        # scales only positive value, which the suite caught when it did not
+        plain = self._s(host="www.example.com", status=200, can_enrol=True)
+        self.assertLessEqual(plain.score, 0)
 
     def test_the_baseline_path_is_unguessable_so_it_cannot_be_special_cased(self):
         from tpihunter.surface import catchall_baseline

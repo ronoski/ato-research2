@@ -116,6 +116,9 @@ def score(s: Surface) -> Surface:
         s.signals.append("no root handler")
 
     # -- testability, applied last because it gates everything above ----------
+    # Scale only a POSITIVE score. Multiplying a negative one by a smaller factor makes it
+    # larger, which inverted the gate for unattractive surfaces — caught by the suite.
+    pts = max(pts, 0)
     if s.principals >= 2:
         s.signals.append(f"{s.principals} principals held — two-principal modes runnable")
     elif s.principals == 1:
