@@ -178,6 +178,55 @@ developer portal returned a **byte-identical 11,998-byte page** for `/`, `/welco
 `/j_spring_security_logout` *and* a nonsense path — three "reachable without auth" results,
 all artefacts.
 
+## The authority matrix (the ninth mode)
+
+Most modes have to argue about what *should* happen. This one does not, because the
+surface says so itself. Rendering a family member's page, the server ships its own verdict
+next to the links it is describing:
+
+```
+canSeeFamilyMemberLoginHistory: false   familyMemberLoginHistoryActionUri: .../login_history
+canTransferAdmin:               false   familyTransferAdminRequestFormActionUri: ...
+canChangeChildProfileOfMember:  false   familyChildProfileEditFormActionUri: ...
+```
+
+Those flags exist to hide buttons. The question is whether the server that computed them
+also **enforces** them. A flag reading false beside a route that serves is a
+declared-versus-enforced mismatch — object-level authorization failure in its clearest
+form, and one where the target has already stated the expected result, so there is nothing
+to argue about.
+
+Direction matters: `granted=false` + served is a finding; `granted=true` + refused is a
+surface stricter than its own UI, which is someone else's bug report.
+
+Three controls, all about the session rather than the routes:
+
+* **Positive.** At least one route whose flag is `true` must serve. A dead session refuses
+  everything, and that otherwise reads as perfect enforcement.
+* **Bystander.** The same route addressed to a principal with *no* relationship to the
+  actor must be refused — this separates "scoped to this relationship" from "not scoped at
+  all", which are very different severities.
+* **Conclusiveness.** A timeout is not a refusal. Unanswered routes stay inconclusive and
+  are named, so a sweep that quietly lost half its probes cannot read as a pass.
+
+Run live against the family surface, with A5 a non-admin member of A4's family:
+
+```
+canChangeChildProfileOfMember   false   refused (403)
+canReleaseFamilyMember          false   refused (403)
+canSeeChildQrCode               false   refused (403)
+canSeeFamilyMemberLoginHistory  false   refused (403)
+canTransferAdmin                false   timed out -> inconclusive
+(bystander: an account of ours with no relationship to this family)   404
+(never-valid id)                                                      404
+```
+
+Every privileged route refused, the bystander and the never-valid id both 404 — so the
+endpoint is scoped to the family, not merely obscure. `canSeeBirthdateOfMember: false` was
+honoured in the payload on *two different flows* (the member detail route and the profile
+route), which is the TPI-6 check: the data was not reachable through a flow that asked
+less. Declared authority matches enforced authority throughout.
+
 ## The scope matrix (the eighth mode)
 
 A token carries the scopes its user consented to. If a resource serves data the token was
@@ -523,6 +572,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `stepup_matrix.py` | **the step-up matrix (TPI-6, live)** — which privileged transitions demand re-authentication, and which equally-privileged sibling does not. Sibling to `stepup.py`, which models the same clause in the state machine |
 | `audience.py` | **the audience matrix (TPI-2)** — a token presented to a resource server it was not minted for; subject-witness, never-issued, positive and tamper controls |
 | `scopes.py` | **the scope matrix (TPI-6 at the token layer)** — consent as a provenance level; judged on a field witness, not on HTTP 200 |
+| `authority.py` | **the authority matrix** — the target's own `can*` capability flags as the oracle; declared authority vs enforced authority |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |

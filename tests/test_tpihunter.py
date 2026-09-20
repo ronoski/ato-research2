@@ -3235,5 +3235,69 @@ class TestScopeMatrix(unittest.TestCase):
         self.assertEqual(r.findings, [])
 
 
+class TestAuthorityMatrix(unittest.TestCase):
+    """The target's own capability flags as the oracle. Most of these assert the mode
+    stays quiet, because a surface being stricter than its UI is not a finding."""
+
+    def _caps(self):
+        from tpihunter.authority import Capability
+        return [Capability("canSeeLoginHistory", False, "/members/A4/login_history"),
+                Capability("canTransferAdmin", False, "/transfer_admin"),
+                Capability("canSeeOwnProfile", True, "/members/me")]
+
+    def _probe(self, table, default=None):
+        from tpihunter.authority import Outcome
+        class R:
+            def __init__(s, o, e=""): s.outcome, s.evidence = o, e
+        def probe(cap):
+            return R(table.get(cap.route, default or Outcome.REFUSED), "x")
+        return probe
+
+    def test_a_false_flag_on_a_serving_route_is_a_finding(self):
+        from tpihunter.authority import Outcome, run_authority_matrix
+        r = run_authority_matrix(self._caps(), self._probe({
+            "/members/me": Outcome.SERVED, "/transfer_admin": Outcome.SERVED}))
+        self.assertEqual(len(r.findings), 1)
+        self.assertIn("canTransferAdmin", r.findings[0].detail)
+
+    def test_refusing_everything_it_declared_false_is_recorded_as_enforced(self):
+        from tpihunter.authority import Outcome, run_authority_matrix
+        r = run_authority_matrix(self._caps(), self._probe({"/members/me": Outcome.SERVED}))
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("matches enforced authority" in e for e in r.enforced))
+
+    def test_a_granted_flag_that_is_refused_is_not_a_finding(self):
+        """A surface stricter than its own UI is someone else's bug report."""
+        from tpihunter.authority import Outcome, run_authority_matrix
+        from tpihunter.authority import Capability
+        caps = [Capability("canDoThing", True, "/thing")]
+        r = run_authority_matrix(caps, self._probe({}))
+        self.assertEqual(r.findings, [])
+
+    def test_without_a_granted_route_serving_the_sweep_means_nothing(self):
+        """A dead session refuses everything, which otherwise reads as perfect enforcement."""
+        from tpihunter.authority import Outcome, run_authority_matrix
+        r = run_authority_matrix(self._caps(), self._probe({}))
+        self.assertEqual(r.findings, [])
+        self.assertEqual(r.enforced, [])
+        self.assertTrue(any("session may simply be dead" in w for w in r.withheld))
+
+    def test_a_bystander_being_served_subsumes_the_flag_question(self):
+        from tpihunter.authority import Outcome, run_authority_matrix
+        class R:
+            def __init__(s, o, e=""): s.outcome, s.evidence = o, e
+        r = run_authority_matrix(self._caps(),
+                                 self._probe({"/members/me": Outcome.SERVED}),
+                                 bystander=lambda cap: R(Outcome.SERVED, "200"))
+        self.assertTrue(any("not scoped at all" in f.detail for f in r.findings))
+
+    def test_a_route_that_never_answered_is_not_evidence_of_enforcement(self):
+        from tpihunter.authority import Outcome, run_authority_matrix
+        r = run_authority_matrix(self._caps(), self._probe(
+            {"/members/me": Outcome.SERVED, "/transfer_admin": Outcome.INCONCLUSIVE}))
+        self.assertTrue(any("never answered" in w for w in r.withheld))
+        self.assertIn("canTransferAdmin", " ".join(r.withheld))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

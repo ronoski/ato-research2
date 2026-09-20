@@ -13,6 +13,7 @@ The pieces:
   probes       hand-written TPI probe plans
   browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
   stepup_matrix  step-up across live flows (TPI-6): equal-privilege flows that disagree
+  authority    the authority matrix — the target's own capability flags as the oracle
   scopes       the scope matrix (TPI-6 at the token layer): consent as a level
   audience     the audience matrix (TPI-2): a token presented where it was not minted for
   sessions     sessions as scarce inventory — reuse before you spend, and a login budget
@@ -48,6 +49,8 @@ from .identifiers import Variant, probe_identifier, variants
 from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
 from .credentials import CredentialSample, Shape, analyse, decode_jwt
 from .sessions import LoginLedger, NoSessionAvailable, Session, SessionStore
+from .authority import (AuthorityFinding, AuthorityResult, Capability, Outcome,
+                        run_authority_matrix)
 from .scopes import (Resource, ScopeFinding, ScopeResult, ScopeSet, Served,
                       run_scope_matrix)
 from .audience import (Acceptance, Audience, AudienceResult, Presentation, Token,
@@ -98,6 +101,7 @@ __all__ = [
     "run_audience_matrix", "Audience", "Token", "Presentation", "Acceptance",
     "AudienceResult", "tamper",
     "run_scope_matrix", "ScopeSet", "Resource", "Served", "ScopeResult", "ScopeFinding",
+    "run_authority_matrix", "Capability", "Outcome", "AuthorityResult", "AuthorityFinding",
     "nintendo_account_transitions",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
