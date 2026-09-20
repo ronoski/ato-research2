@@ -19,7 +19,7 @@ This repo has two halves:
 ## Quickstart
 
 ```bash
-python3 -m unittest discover     # regression suite (102 tests, stdlib only)
+python3 -m unittest discover     # regression suite (123 tests, stdlib only)
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo  # automata learning: L* + W-method oracle recovers & certifies the auth FSM
@@ -32,6 +32,7 @@ python3 -m tpihunter.report_demo # turn the findings into a submittable evidence
 python3 -m tpihunter.retry_demo  # oracle confirmation: a flaky target can't flip the verdict
 python3 -m tpihunter.alias_demo  # richer params: the agent drives a flow needing a second identifier
 python3 -m tpihunter.safety_demo # the oracle's controls + the engagement policy: what stops this misfiring
+python3 -m tpihunter.live_demo   # a real HTTP target, described as data, proved, then hunted
 ```
 
 The core is stdlib-only; no `pip install`. Two optional integrations bring their own
@@ -59,6 +60,30 @@ also `register_action(...)` to hypothesize a flow the alphabet lacks (magic-link
 pairing, org invite, email alias) and probe with it — how it finds bugs a fixed enumerator
 never could. (For CI / headless runs there's also an API strategist; see the
 [tool README](tpihunter/README.md).)
+
+### Pointing it at a real target
+
+Nobody writes an adapter. The operator authorizes the scope out of band, and the agent
+describes the target as data:
+
+```bash
+export TPIHUNTER_ENGAGEMENT=/path/to/engagement.json   # who authorized it, which accounts, which hosts
+```
+
+> Describe the staging login API with `set_target`, then `validate_target`, then hunt it.
+
+The agent calls `set_target(profile)` (base URL, test accounts, one request per action,
+the oracle surface) and `validate_target()`, which proves each piece works — each
+principal gets its own session, two principals resolve to two accounts, the victim can
+plant a canary and read it back, a foreign reference is refused — and names the profile
+field to fix for anything that failed. **Probing is blocked until it passes**, because an
+unvalidated profile returns confident SAFE verdicts for a target it never reached.
+
+The agent cannot widen the scope: a profile naming an identifier or host the engagement
+file does not authorize is refused before a request is sent, and every URL — including
+every redirect — is re-checked against the policy. See
+[`tpihunter/README.md`](tpihunter/README.md#hunting-a-real-target), or run
+`python3 -m tpihunter.live_demo` to watch the whole thing against a loopback server.
 
 ## Working on this project?
 

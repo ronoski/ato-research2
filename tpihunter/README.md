@@ -187,6 +187,10 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
+| `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
+| `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
+| `validate.py` | `validate_target()` — prove the profile works before any verdict from it counts |
+| `http_mock.py` | the vulnerable mock behind a real socket (loopback only), plus the worked example profile |
 | `policy.py` | **rules of engagement as data** — `EngagementPolicy` + `guard()`: scope allowlists, destructive-action gates, budget, dry run, audit log |
 | `redact.py` | secret scrubbing for everything the tool emits (reports, audit trail) |
 | `creds.py` | per-run credentials and identifiers — never literals in source |
@@ -204,10 +208,127 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `alias_demo.py` | richer params — drive a flow that needs a second identifier (M14) |
 | `coverage_demo.py` | agent situational awareness — reason codes, coverage map, patience-stop (M16) |
 | `safety_demo.py` | the oracle's controls and the engagement policy — what stops this doing the wrong thing to a real system |
+| `live_demo.py` | the live path end to end — describe an HTTP target, prove it, hunt it, same bugs |
 
 Tests live in `../tests/` (stdlib `unittest`): `python3 -m unittest discover`.
 
 ## Hunting a real target
+
+Nobody writes an adapter. A target is **described as data** and the description is
+**proved before it is trusted**:
+
+```
+python3 -m tpihunter.live_demo
+```
+
+starts the vulnerable mock on a loopback HTTP port, describes it with a `TargetProfile`,
+validates the description, and then runs the ordinary hunt against it — finding the same
+TPI-1 and TPI-4, with the same minimal repros, through sockets and cookies and JSON.
+
+### Who authorizes what
+
+The trust boundary matters more than the plumbing. **The operator authorizes the scope;
+the agent only describes the target.** A policy written by the agent it constrains is not
+a control, so the engagement lives on disk, out of band:
+
+```bash
+export TPIHUNTER_ENGAGEMENT=/path/to/engagement.json
+```
+```json
+{"name": "acme-bugbounty",
+ "authorized_by": "security@acme.example, ticket SEC-1421, 2026-09-20",
+ "identifiers": ["pentest-a@acme.example", "pentest-v@acme.example", "pentest-c@acme.example"],
+ "hosts": ["staging.acme.example"],
+ "allow_credential_change": false, "max_actions": 500, "min_interval": 0.5}
+```
+
+The agent then calls `set_target(profile)` and `validate_target()`. A profile naming an
+identifier or host the operator did not authorize is refused **before a request is sent**,
+and this session cannot widen the engagement — only the operator can.
+
+### The profile
+
+One request per alphabet action, plus the oracle surface. Placeholders are a closed set
+(`{email} {password} {new_password} {new_email} {alias} {token} {code} {value} {ref}
+{role}`) and an unknown one is a parse error, never a literal sent to the target:
+
+```json
+{"name": "acme-staging", "base_url": "https://staging.acme.example",
+ "accounts": {"victim": {"email": "...", "password": "..."},
+              "attacker": {"email": "...", "password": "..."},
+              "bystander": {"email": "...", "password": "..."}},
+ "session": {"kind": "cookie"},
+ "actions": {
+   "login": {"method": "POST", "path": "/api/login", "expect": [200],
+             "json": {"email": "{email}", "password": "{password}"}},
+   "sso_login": {"method": "POST", "path": "/api/sso", "expect": [200],
+                 "json": {"email": "{email}"}}},
+ "oracle": {
+   "whoami": {"method": "GET", "path": "/api/me", "expect": [200],
+              "extract": {"identity": {"json": "user.id"}}},
+   "plant_marker": {"method": "PUT", "path": "/api/me/note", "expect": [200],
+                    "json": {"note": "{value}"}, "extract": {"ref": {"json": "id"}}},
+   "read_marker": {"method": "GET", "path": "/api/me/note", "expect": [200],
+                   "extract": {"value": {"json": "note"}}},
+   "read_marker_by_ref": {"method": "GET", "path": "/api/users/{ref}/note",
+                          "expect": [200], "extract": {"value": {"json": "note"}}}},
+ "channel": {"method": "GET", "path": "/testing/inbox?address={email}", "expect": [200],
+             "extract": {"token": {"regex": "token=([A-Za-z0-9]+)"}}}}
+```
+
+`http_mock.profile_for()` is a complete working one — copy it and change the routes.
+An action name the profile declares but the default alphabet lacks (a magic link, a
+device pairing, an org invite) is reachable from `register_action`, so the agent can
+extend the alphabet and have a real request behind it.
+
+### Proving it works
+
+An unvalidated profile is the worst failure mode this tool has: one wrong field — a login
+route that returns 200 on failure, an `identity` extracted from a null, a marker route
+that silently does nothing — and every probe returns a confident SAFE for a target it
+never correctly reached. An agent reads that as "secure" and stops looking. So probing a
+live target is **blocked** until `validate_target()` passes:
+
+```
+PASS  engagement        — policy 'acme-bugbounty' authorizes 3 identifier(s) and host staging.acme.example
+PASS  reachable         — base_url answered HTTP 200
+PASS  session:victim    — login -> session, identity 41ab…
+PASS  session:attacker  — login -> session, identity 7c02…
+PASS  independence      — the two principals resolve to two different accounts
+PASS  canary            — planted and read back by the owner
+PASS  by_ref            — the owner can read its own resource
+PASS  baseline_scoping  — a second account is refused the victim's resource
+PASS  negative_control  — an invalid reference is refused
+PASS  bystander         — third account enrolled, independent
+FAIL  channel           — reset_request sent, but no token came back from the channel
+                          fix: `channel` (path/extract.token) must fetch the message
+                          delivered to {email} and pull the token out.
+```
+
+Every failure names the field to fix, so the loop is: fix one line, re-validate. It also
+reports what it left on the target (accounts created, markers planted, tokens outstanding).
+A `baseline_scoping` failure is not a profile error — it is a finding, reported before the
+hunt even starts.
+
+### What the transport enforces
+
+`live_adapter()` builds both layers over one audit log. The transport enforces what an
+action-level guard cannot see — **every URL, including every redirect hop**, is re-checked
+against the policy, so a target answering a probe with a 302 does not get to choose what
+this tool connects to — plus TLS verification, a per-request timeout, a response size cap,
+a rate limit and a hard request budget. On top of it `policy.guard()` applies the
+action-level gates and records the audit trail.
+
+Two things the profile cannot do for you: **one transport per principal** is handled (a
+cookie jar each), but the accounts must genuinely be separate — `validate_target()`'s
+independence check is what tells you — and **own accounts only** remains yours to honour.
+
+---
+
+### Writing an adapter by hand
+
+Still supported, and the right answer for a target a profile cannot describe (a native
+app, a gRPC surface, a flow needing a browser).
 
 **First, the engagement.** Rules of engagement live in data and are enforced per action,
 so the common accidents are impossible rather than unlikely:

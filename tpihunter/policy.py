@@ -104,6 +104,40 @@ class EngagementPolicy:
     def authorized(self) -> bool:
         return bool(self.authorized_by.strip())
 
+    # -- loading --------------------------------------------------------------
+    @staticmethod
+    def from_dict(raw: dict) -> "EngagementPolicy":
+        """Build a policy from JSON. Unknown keys are refused rather than ignored: a
+        misspelled `allow_credential_change` that silently did nothing would read as a
+        gate that is closed when it is open."""
+        known = {f for f in EngagementPolicy.__dataclass_fields__}
+        unknown = set(raw) - known
+        if unknown:
+            raise PolicyViolation(f"engagement file has unknown key(s): {sorted(unknown)}; "
+                                  f"known keys are {sorted(known)}")
+        kw = dict(raw)
+        for key in ("identifiers", "hosts"):
+            if key in kw:
+                kw[key] = frozenset(str(x) for x in kw[key])
+        return EngagementPolicy(**kw)
+
+    @staticmethod
+    def from_file(path) -> "EngagementPolicy":
+        """Read the engagement from a file the OPERATOR wrote.
+
+        This is deliberately not something a model can supply. A policy authored by the
+        agent being policed is not a control, so the authorization lives on disk, out of
+        band, and the agent may only describe the target — never widen the scope."""
+        import json
+        import pathlib
+        text = pathlib.Path(path).read_text()
+        try:
+            raw = json.loads(text)
+        except ValueError as e:
+            raise PolicyViolation(f"engagement file {path} is not valid JSON: {e}") from e
+        if not isinstance(raw, dict):
+            raise PolicyViolation(f"engagement file {path} must contain a JSON object")
+        return EngagementPolicy.from_dict(raw)
 
     # -- checks ---------------------------------------------------------------
     def preflight(self) -> list[str]:

@@ -18,6 +18,7 @@ Each method returns plain JSON-able dicts.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from .agent import Attempt, Coverage, _fired_signature, _outcome_reason, valid_action_id
@@ -28,6 +29,7 @@ from .harness import run_plan
 from .matrix import RevocationMatrix, default_mints, default_mutations
 from .mock_target import MockAdapter
 from .oracle import AtoOracle
+from .policy import EngagementPolicy, PolicyViolation
 from .redact import redact, untrusted
 from .types import Principal
 
@@ -40,6 +42,36 @@ _TARGETS = {
                          "revokes": {"logout"}, "plane_local": {"logout"}},
 }
 
+# The name a live, profile-driven target goes by. It only becomes available once the
+# OPERATOR has authorized one (see `_load_engagement`) and the agent has described it
+# with set_target() and proved the description works with validate_target().
+LIVE = "live"
+
+# Where the operator's authorization lives. Read from disk at session start, never from
+# anything the model can write: a policy authored by the agent it constrains is not a
+# control. The agent may describe a target; it may not widen the scope it runs in.
+ENGAGEMENT_ENV = "TPIHUNTER_ENGAGEMENT"
+
+
+def _load_engagement() -> tuple[Optional[EngagementPolicy], str]:
+    """(policy, why-not). No env var => no live hunting, and that is the default."""
+    path = os.environ.get(ENGAGEMENT_ENV)
+    if not path:
+        return None, (f"no live engagement is authorized. To hunt a real target, the "
+                      f"OPERATOR (not the agent) writes an engagement file and points "
+                      f"{ENGAGEMENT_ENV} at it: "
+                      f'{{"name": "...", "authorized_by": "who authorized this and where '
+                      f'it is recorded", "identifiers": ["the test accounts"], "hosts": '
+                      f'["the in-scope hosts"], "max_actions": 500}}')
+    try:
+        policy = EngagementPolicy.from_file(path)
+    except (OSError, PolicyViolation) as e:
+        return None, f"{ENGAGEMENT_ENV}={path} could not be loaded: {e}"
+    problems = policy.preflight()
+    if problems:
+        return None, (f"the engagement file at {path} is not usable:\n  - "
+                      + "\n  - ".join(problems))
+    return policy, ""
 
 
 def _parse_params(params) -> tuple[tuple, Optional[str]]:
@@ -79,15 +111,24 @@ class HuntSession:
         # victim's canary already proves takeover, and writing another principal's private
         # resource is the one irreversible thing the loop can do to a live target.
         self.mutate = bool(mutate)
+        # live-target state: the operator's authorization, the agent's description of the
+        # target, and whether that description has been shown to work.
+        self.policy, self._no_engagement = _load_engagement()
+        self.profile = None
+        self.validation = None
         self.reset(target)
 
     # -- lifecycle ------------------------------------------------------------
     def reset(self, target: str = "mock-vulnerable") -> dict:
-        if target not in _TARGETS:
+        if target == LIVE:
+            if self.profile is None:
+                return {"ok": False, "error": "no live target described yet; call "
+                                              "set_target(profile) first"}
+        elif target not in _TARGETS:
             return {"ok": False, "error": f"unknown target '{target}'",
-                    "targets": list(_TARGETS)}
+                    "targets": self._target_names()}
         self.target = target
-        self._cfg = dict(_TARGETS[target])          # MockAdapter kwargs for this target
+        self._cfg = dict(_TARGETS.get(target, {}))  # MockAdapter kwargs for this target
         self.patched = self._cfg.get("patched", False)
         self.specs = dict(ACTIONS)     # a private copy — register_action never mutates the global
         self._fired: list = []
@@ -95,15 +136,77 @@ class HuntSession:
         self._fired_sigs: set = set()  # (clause, effects, triggers) — distinctness, for is_new
         self._history: list = []       # Attempt per probe — feeds coverage()
         self.probes_run = 0
-        return {"ok": True, "target": target, "targets": list(_TARGETS),
+        return {"ok": True, "target": target, "targets": self._target_names(),
                 "note": "session reset; attacker does NOT control the email, victim does. "
                         "Targets: mock-vulnerable, mock-patched, mock-plane-split (the last "
                         "shows a cross-plane SPLIT in revocation_matrix())."}
 
+    def _target_names(self) -> list:
+        names = list(_TARGETS)
+        if self.profile is not None:
+            names.append(LIVE)
+        return names
 
     def _adapter(self, control):
+        if self.target == LIVE:
+            from .live import live_adapter
+            return live_adapter(self.profile, self.policy, control=control)
         return MockAdapter(control=control, **self._cfg)
 
+    # -- describing and proving a real target ---------------------------------
+    def set_target(self, profile: dict) -> dict:
+        """Describe a real target as data, so it can be hunted without anyone writing code.
+
+        The engagement policy is NOT part of this: the operator authorizes the scope out of
+        band and this session only checks the description against it. A profile naming an
+        identifier or host the operator did not authorize is refused here, before a single
+        request is sent."""
+        from .profile import ProfileError, TargetProfile
+        if self.policy is None:
+            return {"ok": False, "error": self._no_engagement}
+        try:
+            prof = TargetProfile.from_dict(profile)
+        except ProfileError as e:
+            return {"ok": False, "error": str(e),
+                    "next": "Fix the listed fields and call set_target again."}
+        outside = prof.identifiers() - set(self.policy.identifiers)
+        if outside:
+            return {"ok": False, "error": f"the profile uses identifiers the engagement does "
+                                          f"not authorize: {sorted(outside)}",
+                    "authorized": sorted(self.policy.identifiers),
+                    "next": "Use the authorized test accounts, or ask the operator to widen "
+                            "the engagement file. This session cannot widen it."}
+        host_problem = self.policy.check_host(prof.host)
+        if host_problem:
+            return {"ok": False, "error": host_problem, "authorized": sorted(self.policy.hosts)}
+        self.profile = prof
+        self.validation = None
+        victim = prof.accounts.get("victim")
+        if victim is not None:
+            self.email = victim.email
+            self.control = {self.victim.name: {self.email},
+                            self.attacker.name: {recovery_alias("attacker")}}
+        return {"ok": True, "profile": prof.describe(),
+                "next": "Call validate_target() before probing. An unvalidated profile "
+                        "produces confident SAFE verdicts on a target it never reached."}
+
+    def validate_target(self) -> dict:
+        """Prove the profile works before any verdict from it is treated as evidence.
+
+        Performs real writes on the engagement's own accounts (registers, plants a marker,
+        reads it back) and reports every check with a one-line fix for the ones that failed."""
+        if self.policy is None:
+            return {"ok": False, "error": self._no_engagement}
+        if self.profile is None:
+            return {"ok": False, "error": "no target described; call set_target(profile) first"}
+        from .validate import validate_target as _validate
+        self.validation = _validate(self.profile, self.policy)
+        out = {"ok": True, **self.validation.as_dict(self.profile)}
+        if self.validation.ready:
+            self.reset(LIVE)
+            out["next"] = ("Profile validated. The session is now on the live target — "
+                           "call briefing() and start probing.")
+        return out
 
     def register_action(self, action_id: str, effect: str,
                         requires: Optional[list] = None, needs_control: bool = False,
@@ -206,6 +309,11 @@ class HuntSession:
                 "a takeover if that alias outlived the victim's rebind."
             ),
             "target": self.target,
+            "live_target": (self.profile.describe() if self.profile is not None
+                            else self._no_engagement or
+                            "no live target described — call set_target(profile) to hunt a "
+                            "real system, then validate_target() to prove the description "
+                            "works. Until then these tools drive the built-in mock."),
         }
 
     def list_actions(self) -> dict:
@@ -216,6 +324,9 @@ class HuntSession:
 
     # -- the core tool --------------------------------------------------------
     def run_probe(self, steps) -> dict:
+        gate = self._live_gate()
+        if gate is not None:
+            return gate
         merged, err = self._parse(steps)
         if err:
             return {"ok": False, "error": err}
@@ -274,6 +385,25 @@ class HuntSession:
             e["detail"] = untrusted(redact(e["detail"]), 240)
         return out
 
+    def _live_gate(self) -> Optional[dict]:
+        """Refuse to hunt a live target whose description has not been shown to work.
+
+        This is the same rule the oracle applies to its own controls, one level up: a probe
+        against a target the profile never correctly reached is not a SAFE result, it is no
+        result, and letting it read as SAFE is how an agent concludes a system is secure
+        without ever having tested it."""
+        if self.target != LIVE:
+            return None
+        if self.validation is None:
+            return {"ok": False, "error": "this live target has not been validated",
+                    "next": "Call validate_target() first."}
+        if not self.validation.ready:
+            return {"ok": False, "error": "the live target's profile has blocking failures",
+                    "blocking_failures": [c.name for c in self.validation.checks
+                                          if c.status == "fail" and c.blocking],
+                    "next": "Call validate_target() to see each fix, repair the profile with "
+                            "set_target(), and validate again."}
+        return None
 
     def revocation_matrix(self) -> dict:
         """The own-account lifecycle hunt: for each way of minting a session and each
@@ -282,6 +412,9 @@ class HuntSession:
         owner's logout/reset). Single-principal, reversible, reads no one else's data —
         the ROE-safe mode for a real engagement. Each cell carries its own positive and
         negative control, so a SURVIVED verdict is not a broken-check artifact."""
+        gate = self._live_gate()
+        if gate is not None:
+            return gate
         owner = Principal("owner")
         email = "owner@corp.example"
         control = {owner.name: {email}}

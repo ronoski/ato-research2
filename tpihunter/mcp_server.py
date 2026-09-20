@@ -111,10 +111,40 @@ def build_server():
         return session.report(fmt)
 
     @server.tool()
+    def set_target(profile: dict) -> dict:
+        """Describe a REAL target as data, so you can hunt it without anyone writing code.
+
+        `profile` names the base URL, the test accounts, how a session is carried, and one
+        request per alphabet action plus the oracle surface (whoami, plant_marker,
+        read_marker, read_marker_by_ref, write_marker) and a `channel` that fetches a mailed
+        token. Placeholders: {email} {password} {new_password} {new_email} {alias} {token}
+        {code} {value} {ref} {role}. Example action:
+        {"method":"POST","path":"/api/login","json":{"email":"{email}","password":"{password}"},
+         "expect":[200],"extract":{"identity":{"json":"user.id"}}}
+
+        You cannot widen the scope: the operator authorizes the accounts and hosts out of
+        band, and a profile naming anything else is refused before a request is sent. After
+        this, call validate_target()."""
+        return session.set_target(profile)
+
+    @server.tool()
+    def validate_target() -> dict:
+        """Prove the profile actually works before treating any verdict from it as evidence.
+
+        Checks that each principal can get its own session, that two principals resolve to
+        two different accounts, that the victim can plant a canary and read it back, that a
+        foreign or invalid reference is refused, that the bystander account exists, and that
+        the channel delivers a token. Every failure comes with the profile field to fix.
+        Probing is blocked until this passes — an unvalidated profile produces confident
+        SAFE verdicts on a target it never correctly reached."""
+        return session.validate_target()
+
+    @server.tool()
     def reset(target: str = "mock-vulnerable") -> dict:
         """Start a fresh hunt session. target: "mock-vulnerable", "mock-patched" (confirm a
-        bug closes under the fix), or "mock-plane-split" (a multi-plane estate where logout
-        revokes only its own plane — revocation_matrix() shows a cross-plane SPLIT)."""
+        bug closes under the fix), "mock-plane-split" (a multi-plane estate where logout
+        revokes only its own plane — revocation_matrix() shows a cross-plane SPLIT), or
+        "live" once set_target()/validate_target() have succeeded."""
         return session.reset(target)
 
     return server

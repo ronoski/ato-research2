@@ -31,7 +31,7 @@ is gated on the owner and **cannot be shortcut on the mock**.
 | # | rung | status |
 |---|------|--------|
 | 1 | Theory + a self-validating reference implementation | ✅ **here** (M0–M3, M5, M7–M15) |
-| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ❌ M4 — unbuilt, owner-gated |
+| 2 | Runs live vs. **one authorized target**, reproduces a *known* finding | ⚠️ **M4 is now built** (2026-09-20) and validated against a loopback HTTP target; the rung still needs a real authorized one |
 | 3 | A **real** LLM strategist drives a live run, adapts, and knows when to stop | ❌ never run |
 | 4 | Finds a bug that **wasn't planted**, on a system it didn't build | ❌ the real bar |
 
@@ -41,7 +41,12 @@ Rungs 2–4 *are* the "AI hunter" claim. None is reachable on the mock.
 
 ## What IS done — do not redo it
 
-- The full loop, self-validating on the mock: **102 tests, 12 demos green**, stdlib-only core.
+- The full loop, self-validating on the mock: **123 tests, 13 demos green**, stdlib-only core.
+- **The live path (M4).** A target is described as data (`profile.py`), driven over HTTP by
+  `live.py` with scope enforced per request, and the description must pass
+  `validate.py`'s checks before any verdict from it counts. `http_mock.py` runs the same
+  vulnerable target behind a real socket, and the live path finds the **same TPI-1 and
+  TPI-4 with the same minimal repros** — with nobody writing an adapter.
 - Two judgment modes: the two-principal confluence **oracle** and the single-principal
   **revocation matrix**.
 - Automated abstraction: **L\*** learns the auth FSM, the **W-method** oracle (M15) certifies it
@@ -104,11 +109,12 @@ move, and it is nearly worthless now. If you catch yourself adding a mock verb o
 sub-mode, stop and re-read the Bottom line.
 
 ✅ **If the owner authorizes a target** (the only thing that moves the needle):
-1. Build **M4** minimally — a real `TargetAdapter` (one HTTP client per principal) + real channels
-   (mailbox/IdP). Isolate the new dep (`httpx`) like `anthropic`/`mcp`. **The ROE half is already
-   built** (`policy.py`: identifier/host allowlists, destructive-action gates, budget, dry run,
-   preflight, audit trail) and is ungated, so M4 is now adapter + channels, wrapped in
-   `policy.guard()`.
+1. ~~Build **M4**~~ — **done (2026-09-20)**, and it needed no dependency: `profile.py` +
+   `live.py` + `validate.py`, stdlib `urllib` with a cookie jar per principal, the ROE layer
+   underneath. Write the engagement file, have the agent call `set_target()` /
+   `validate_target()`, and hunt. The one piece a real target still needs is a **real channel**
+   — `channel` currently fetches a token over HTTP, which fits a catch-all test mailbox with an
+   API (Mailosaur, MailHog, mailpit) but not IMAP.
 2. **Reproduce a known finding** on that target and *watch the oracle for a false positive on a
    shared/tenant account* — that is the invariant's first real test.
 3. **Only then** let a real LLM strategist drive the live run, and add a stopping/coverage model.
@@ -179,6 +185,51 @@ reachable.
 
 **What it deliberately did not do:** add a mock feature, or claim any of this constitutes
 live validation. The bottom line below is unchanged.
+
+---
+
+## Amendment 2 — 2026-09-20 (the live path, M4)
+
+The question this answers: *why could an AI hunter session never touch anything real?* Not
+because the agent was not good enough. Because `HuntSession._adapter()` hard-returned
+`MockAdapter`, there was no injection point for a real target, and there was no HTTP code
+in the package at all. The "agent as hunter" story terminated in an in-memory mock.
+
+The wall was never the hunt — it was the **adapter**, which only a human could write, in
+Python, and load into the process. So the adapter became **data**:
+
+| | |
+|---|---|
+| `profile.py` | a target as JSON — base URL, test accounts, one request per action, the oracle surface, a channel. Closed placeholder set; paths may not leave the profile's origin; a model-authored profile is validated like any other untrusted input |
+| `live.py` | `ScopedTransport` (one cookie jar per principal; **every URL and every redirect hop** re-checked against the policy; TLS, timeout, size cap, rate limit, budget) + `LiveAdapter` |
+| `validate.py` | `validate_target()` — the profile must be shown to work before a verdict from it is evidence |
+| `http_mock.py` | the same `VulnerableTarget` behind a loopback socket, plus a worked example profile |
+
+**The trust boundary is the design decision.** The engagement policy is read from a file
+the *operator* writes (`TPIHUNTER_ENGAGEMENT`), never from the model: a policy authored by
+the agent it constrains is not a control. The agent may describe a target; it may not widen
+the scope. A profile naming an unauthorized identifier or host is refused before a request
+is sent, and the tests assert it.
+
+**`validate_target()` is the other half, and it is the same defect as M16's, one level up.**
+M16 stopped the oracle from calling a probe SAFE when its own controls had not held. A
+profile with one wrong field — a login route that 200s on failure, an `identity` extracted
+from a null, a marker route that silently does nothing — produces confident SAFE verdicts
+across the *entire* surface, and an agent reads that as "this target is secure". So probing
+a live target is blocked until every blocking check passes, and each failure names the
+profile field to fix.
+
+**What it proves:** the live path finds the same TPI-1 and TPI-4, with the same minimal
+repros, as the in-process path, and the patched build still yields nothing — through
+sockets, cookies and JSON, with no adapter written.
+
+**What it does not prove:** anything about a real system. The only target it has ever run
+against is a loopback server this repo wrote. Rung 2 still needs an authorized target;
+what changed is that the remaining distance is now **authorization, not engineering**.
+
+**New risk it introduces, stated plainly:** this package can now send real HTTP requests.
+That is the point, and it is why the scope checks, the budget, the rate limit, the dry run
+and the audit trail are enforced in the transport rather than left to the caller.
 
 ---
 

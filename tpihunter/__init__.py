@@ -11,6 +11,10 @@ The pieces:
   harness      Plan/Step + run_plan: probes as data, executed with oracle checkpoints
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
+  profile      TargetProfile: a real target described as data, not code
+  live         LiveAdapter: drives that profile over HTTP, scope enforced per request
+  validate     validate_target(): prove the profile works before trusting a verdict
+  http_mock    the vulnerable mock behind a real socket, plus a worked example profile
   policy       EngagementPolicy + guard(): rules of engagement enforced per action
   redact       secret scrubbing for anything the tool emits
   creds        per-run credentials and identifiers (never literals in source)
@@ -25,8 +29,11 @@ from .flaky import FlakyAdapter
 from .harness import Plan, Step, execute_action, run_plan
 from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
                      default_mints, default_mutations, run_cell)
+from .live import LiveAdapter, ScopedTransport, live_adapter
 from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
                      PolicyViolation, ScopeViolation, for_mock, guard, policy_report)
+from .profile import ProfileError, TargetProfile
+from .validate import Check, Validation, validate_target
 from .redact import redact
 from .mcp_tools import HuntSession
 from .report import Report, build_bundle, build_report, bundle_to_json, bundle_to_markdown, make_run_fn, revocation_report
@@ -50,6 +57,8 @@ __all__ = [
     "make_run_fn", "revocation_report",
     "EngagementPolicy", "GuardedAdapter", "AuditLog", "guard", "for_mock", "policy_report",
     "PolicyViolation", "ScopeViolation", "BudgetExhausted", "redact",
+    "TargetProfile", "ProfileError", "LiveAdapter", "ScopedTransport", "live_adapter",
+    "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",
     "AtoOracle", "Evidence", "Severity", "Verdict", "Withheld",

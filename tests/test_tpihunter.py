@@ -1342,5 +1342,285 @@ class TestBystanderControl(unittest.TestCase):
         self.assertIn("not the identity lifecycle", doc)
 
 
+# =========================================================================== #
+#  The live path: a target described as data, proved to work, then hunted over
+#  real HTTP. These are the tests that say an AI session could use this on
+#  something other than the in-memory mock.
+# =========================================================================== #
+def _live_bits(url):
+    from tpihunter.http_mock import engagement_for, profile_for
+    from tpihunter.policy import EngagementPolicy
+    from tpihunter.profile import TargetProfile
+    return (TargetProfile.from_dict(profile_for(url)),
+            EngagementPolicy.from_dict(engagement_for(url)))
+
+
+class TestTargetProfile(unittest.TestCase):
+    def test_a_valid_profile_parses_and_describes_itself_without_credentials(self):
+        from tpihunter.http_mock import profile_for
+        from tpihunter.profile import TargetProfile
+        prof = TargetProfile.from_dict(profile_for("http://127.0.0.1:1/"))
+        d = prof.describe()
+        self.assertEqual(d["session"], "cookie")
+        self.assertIn("register", d["actions"])
+        self.assertNotIn("password", json.dumps(d).lower())
+
+    def test_every_problem_is_reported_at_once(self):
+        from tpihunter.profile import ProfileError, TargetProfile
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict({"name": "", "base_url": "ftp://x/",
+                                     "actions": {}, "oracle": {}})
+        text = str(cm.exception)
+        for expected in ("name", "base_url", "accounts.victim", "oracle.whoami"):
+            self.assertIn(expected, text)
+
+    def test_an_action_path_may_not_leave_the_profiles_origin(self):
+        from tpihunter.profile import ProfileError, TargetProfile
+        from tpihunter.http_mock import profile_for
+        raw = profile_for("http://127.0.0.1:1/")
+        raw["actions"]["login"]["path"] = "https://elsewhere.example/api/login"
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict(raw)
+        self.assertIn("path", str(cm.exception))
+
+    def test_unknown_placeholders_are_rejected_not_passed_through(self):
+        from tpihunter.profile import ProfileError, TargetProfile
+        from tpihunter.http_mock import profile_for
+        raw = profile_for("http://127.0.0.1:1/")
+        raw["actions"]["login"]["json"]["otp"] = "{secret_from_nowhere}"
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict(raw)
+        self.assertIn("secret_from_nowhere", str(cm.exception))
+
+    def test_rendering_substitutes_values_and_cannot_restructure_a_request(self):
+        from tpihunter.profile import render
+        body = render({"email": "{email}", "note": "{value}"},
+                      {"email": 'a"@x.example', "value": '", "admin": true, "x": "'})
+        self.assertEqual(body["email"], 'a"@x.example')
+        self.assertNotIn("admin", json.loads(json.dumps(body)))   # still two fields
+        self.assertEqual(set(body), {"email", "note"})
+
+    def test_unsettable_headers_and_bad_regexes_are_refused(self):
+        from tpihunter.profile import ProfileError, TargetProfile
+        from tpihunter.http_mock import profile_for
+        raw = profile_for("http://127.0.0.1:1/")
+        raw["actions"]["login"]["headers"] = {"Host": "elsewhere.example"}
+        raw["channel"]["extract"]["token"] = {"regex": "("}
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict(raw)
+        self.assertIn("Host", str(cm.exception))
+        self.assertIn("regex", str(cm.exception))
+
+
+class TestScopedTransport(unittest.TestCase):
+    def test_scope_holds_for_direct_requests_and_for_redirects(self):
+        from tpihunter.http_mock import serve
+        from tpihunter.live import ScopedTransport
+        from tpihunter.policy import AuditLog, ScopeViolation
+        with serve() as url:
+            _prof, policy = _live_bits(url)
+            t = ScopedTransport(policy, AuditLog())
+            self.assertEqual(t.send("GET", url + "/api/health", {}, None).status, 200)
+            for target in ("http://example.invalid/x",
+                           url + "/testing/redirect?to=http://example.invalid/x"):
+                with self.assertRaises(ScopeViolation):
+                    t.send("GET", target, {}, None)
+
+    def test_budget_fails_closed(self):
+        from tpihunter.http_mock import serve
+        from tpihunter.live import ScopedTransport
+        from tpihunter.policy import AuditLog, BudgetExhausted
+        from dataclasses import replace
+        with serve() as url:
+            _prof, policy = _live_bits(url)
+            t = ScopedTransport(replace(policy, max_actions=3), AuditLog())
+            with self.assertRaises(BudgetExhausted):
+                for _ in range(10):
+                    t.send("GET", url + "/api/health", {}, None)
+            self.assertEqual(t.requests, 3)
+
+    def test_adapter_refuses_a_profile_the_policy_does_not_cover(self):
+        from dataclasses import replace
+        from tpihunter.http_mock import serve
+        from tpihunter.live import LiveAdapter
+        from tpihunter.policy import ScopeViolation
+        with serve() as url:
+            prof, policy = _live_bits(url)
+            with self.assertRaises(ScopeViolation):
+                LiveAdapter(prof, replace(policy, identifiers=frozenset({"only@x.example"})))
+            with self.assertRaises(ScopeViolation):
+                LiveAdapter(prof, replace(policy, hosts=frozenset({"elsewhere.example"})))
+
+
+class TestLiveHunt(unittest.TestCase):
+    """The same bugs, through sockets, cookies and JSON — driven by a profile, not code."""
+
+    def _hunt(self, url, **hunter_kw):
+        from tpihunter.http_mock import VICTIM_EMAIL
+        from tpihunter.live import live_adapter
+        attacker, victim = _principals()
+        prof, policy = _live_bits(url)
+        hunter = AgentHunter(
+            lambda: live_adapter(prof, policy, control={victim.name: {VICTIM_EMAIL}}),
+            attacker, victim, VICTIM_EMAIL, budget=300, **hunter_kw)
+        return hunter.hunt(EnumeratorStrategist(max_attacker=1, max_victim=2))
+
+    def test_live_path_finds_the_same_bugs_as_the_in_process_path(self):
+        from tpihunter.http_mock import serve
+        with serve(patched=False) as url:
+            res = self._hunt(url)
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+
+    def test_the_load_bearing_invariant_holds_over_http(self):
+        from tpihunter.http_mock import serve
+        with serve(patched=True) as url:
+            res = self._hunt(url)
+        self.assertEqual(res.bugs, [])
+
+    def test_bystander_control_reclassifies_a_flat_idor_over_http(self):
+        from tpihunter.enumerator import make_candidate
+        from tpihunter.http_mock import VICTIM_EMAIL, serve
+        from tpihunter.live import live_adapter
+        attacker, victim = _principals()
+        with serve(patched=True, flat_idor=True) as url:
+            prof, policy = _live_bits(url)
+            a = live_adapter(prof, policy, control={victim.name: {VICTIM_EMAIL}})
+            plan = make_candidate((("attacker", "register"), ("victim", "sso_login")),
+                                  attacker, victim, VICTIM_EMAIL).plan
+            v = run_plan(a, plan, AtoOracle(a, attacker, victim, resource=VICTIM_EMAIL))[0]
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertEqual(v.clause_id, "AUTHZ-1")
+
+
+class TestValidateTarget(unittest.TestCase):
+    """A profile is not evidence of anything until it has been shown to work."""
+
+    def _validate(self, mutate=lambda d: d, **serve_kw):
+        from tpihunter.http_mock import engagement_for, profile_for, serve
+        from tpihunter.policy import EngagementPolicy
+        from tpihunter.profile import TargetProfile
+        from tpihunter.validate import validate_target
+        with serve(**serve_kw) as url:
+            prof = TargetProfile.from_dict(mutate(profile_for(url)))
+            return validate_target(prof, EngagementPolicy.from_dict(engagement_for(url)))
+
+    def _status(self, v, name):
+        return next(c.status for c in v.checks if c.name == name)
+
+    def test_a_correct_profile_passes_every_check(self):
+        v = self._validate()
+        self.assertTrue(v.ready)
+        self.assertTrue(all(c.status == "pass" for c in v.checks),
+                        [c.name for c in v.checks if c.status != "pass"])
+        self.assertTrue(v.artifacts)      # it says what it left behind
+
+    def test_a_wrong_identity_field_blocks_hunting(self):
+        def m(d):
+            d["oracle"]["whoami"]["extract"]["identity"] = {"json": "no_such_field"}
+            return d
+        v = self._validate(m)
+        self.assertFalse(v.ready)
+        self.assertEqual(self._status(v, "identity:victim"), "fail")
+        self.assertIn("oracle.whoami.extract.identity",
+                      next(c.fix for c in v.checks if c.name == "identity:victim"))
+
+    def test_a_marker_route_that_does_not_round_trip_blocks_hunting(self):
+        def m(d):
+            d["oracle"]["read_marker"]["path"] = "/api/me"
+            return d
+        v = self._validate(m)
+        self.assertFalse(v.ready)
+        self.assertEqual(self._status(v, "canary"), "fail")
+
+    def test_a_broken_channel_warns_but_does_not_block(self):
+        def m(d):
+            d["channel"]["extract"]["token"] = {"regex": "nomatch=([0-9]+)"}
+            return d
+        v = self._validate(m)
+        self.assertTrue(v.ready)
+        self.assertEqual(self._status(v, "channel"), "fail")
+
+    def test_a_target_that_already_leaks_is_reported_as_a_finding(self):
+        v = self._validate(flat_idor=True)
+        self.assertTrue(v.ready)          # the profile is fine; the target is not
+        self.assertEqual(self._status(v, "baseline_scoping"), "fail")
+        self.assertIn("AUTHZ-1",
+                      next(c.detail for c in v.checks if c.name == "baseline_scoping"))
+
+
+class TestLiveSessionGating(unittest.TestCase):
+    """The trust boundary: the operator authorizes the scope, the agent only describes
+    the target, and nothing is hunted until the description has been proved."""
+
+    def _session(self, url, engagement=None):
+        import os
+        from unittest import mock
+        from tpihunter.http_mock import engagement_for
+        import json as _json
+        import tempfile
+        import pathlib as _p
+        path = _p.Path(tempfile.mkdtemp()) / "engagement.json"
+        path.write_text(_json.dumps(engagement if engagement is not None
+                                    else engagement_for(url)))
+        with mock.patch.dict(os.environ, {"TPIHUNTER_ENGAGEMENT": str(path)}):
+            from tpihunter.mcp_tools import HuntSession
+            return HuntSession()
+
+    def test_without_an_engagement_file_no_live_target_is_possible(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}, clear=True):
+            from tpihunter.mcp_tools import HuntSession
+            s = HuntSession()
+            r = s.set_target({})
+            self.assertFalse(r["ok"])
+            self.assertIn("OPERATOR", r["error"])
+            self.assertEqual(s.validate_target()["ok"], False)
+
+    def test_the_agent_cannot_widen_the_authorized_scope(self):
+        from tpihunter.http_mock import profile_for, serve
+        with serve() as url:
+            s = self._session(url)
+            bad = profile_for(url)
+            bad["accounts"]["attacker"]["email"] = "ceo@corp.example"
+            r = s.set_target(bad)
+            self.assertFalse(r["ok"])
+            self.assertIn("ceo@corp.example", r["error"])
+
+            off = profile_for(url)
+            off["base_url"] = "http://elsewhere.example"
+            self.assertFalse(s.set_target(off)["ok"])
+
+    def test_probing_is_blocked_until_the_profile_is_validated(self):
+        from tpihunter.http_mock import profile_for, serve
+        with serve(patched=False) as url:
+            s = self._session(url)
+            self.assertTrue(s.set_target(profile_for(url))["ok"])
+            s.reset("live")
+            r = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+            self.assertFalse(r["ok"])
+            self.assertIn("not been validated", r["error"])
+
+            v = s.validate_target()
+            self.assertTrue(v["ready"])
+            self.assertEqual(s.target, "live")
+            hit = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+            self.assertEqual(hit["severity"], "takeover")
+            self.assertEqual(hit["clause_id"], "TPI-1")
+
+    def test_a_profile_with_blocking_failures_cannot_be_hunted(self):
+        from tpihunter.http_mock import profile_for, serve
+        with serve() as url:
+            s = self._session(url)
+            broken = profile_for(url)
+            broken["oracle"]["whoami"]["extract"]["identity"] = {"json": "nope"}
+            self.assertTrue(s.set_target(broken)["ok"])
+            self.assertFalse(s.validate_target()["ready"])
+            s.reset("live")
+            r = s.run_probe([["attacker", "register"], ["victim", "sso_login"]])
+            self.assertFalse(r["ok"])
+            self.assertIn("identity:victim", r["blocking_failures"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
