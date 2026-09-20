@@ -225,7 +225,34 @@ Every privileged route refused, the bystander and the never-valid id both 404 �
 endpoint is scoped to the family, not merely obscure. `canSeeBirthdateOfMember: false` was
 honoured in the payload on *two different flows* (the member detail route and the profile
 route), which is the TPI-6 check: the data was not reachable through a flow that asked
-less. Declared authority matches enforced authority throughout.
+less.
+
+Run again from the side that *has* the power — the family admin, against an **adult**
+member with its own password and login — the match is exact:
+
+```
+declared flag                             granted  outcome
+canReleaseFamilyMember                    true     served
+canTransferAdmin                          true     served
+canChangeChildProfileOfMember             false    refused
+canSeeChildQrCode                         false    refused
+canWithdrawChild                          false    refused
+canSeeFamilyMemberLoginHistory            false    refused
+canChangeParentalControlSettingsOfMember  false    refused
+family/child/<member>/password/edit       (none)   refused
+family/child/<member>/login_id/edit       (none)   refused
+```
+
+The `familyChild*` routes exist so a parent can administer a child. Pointed at an adult
+member they would be takeover by a family admin — and they refuse. Declared authority
+matches enforced authority in both directions.
+
+That run also produced a false `AUTHZ-1`, which is why `Capability` carries `subject`. The
+bystander probe substitutes an unrelated principal into the route; a route like
+`/family/members/me` names nobody, the substitution silently no-ops, and the probe
+re-fetches the **actor's own** resource — which serves, and reads as "this route is not
+scoped at all". A bystander is now only run where `subject` actually appears in the route,
+and the skipped ones are named in `withheld` rather than quietly dropped.
 
 ## The scope matrix (the eighth mode)
 

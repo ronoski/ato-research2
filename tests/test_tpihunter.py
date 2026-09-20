@@ -3241,8 +3241,10 @@ class TestAuthorityMatrix(unittest.TestCase):
 
     def _caps(self):
         from tpihunter.authority import Capability
-        return [Capability("canSeeLoginHistory", False, "/members/A4/login_history"),
-                Capability("canTransferAdmin", False, "/transfer_admin"),
+        # subject= is what makes a bystander probe well defined: it names the principal in
+        # the route that an unrelated one can be substituted for.
+        return [Capability("canSeeLoginHistory", False, "/members/A4/login_history", subject="A4"),
+                Capability("canTransferAdmin", False, "/transfer_admin"),   # names nobody
                 Capability("canSeeOwnProfile", True, "/members/me")]
 
     def _probe(self, table, default=None):
@@ -3289,6 +3291,33 @@ class TestAuthorityMatrix(unittest.TestCase):
         r = run_authority_matrix(self._caps(),
                                  self._probe({"/members/me": Outcome.SERVED}),
                                  bystander=lambda cap: R(Outcome.SERVED, "200"))
+        self.assertTrue(any("not scoped at all" in f.detail for f in r.findings))
+
+    def test_a_route_naming_no_subject_gets_no_bystander_probe(self):
+        """The false AUTHZ-1 from the first live run. `/family/members/me` names nobody, so
+        substituting an unrelated principal is impossible; a bystander probe that silently
+        fails to substitute re-fetches the ACTOR's own resource, which serves, and reads as
+        'this route is not scoped at all'."""
+        from tpihunter.authority import Capability, Outcome, run_authority_matrix
+        class R:
+            def __init__(s, o, e=""): s.outcome, s.evidence = o, e
+        caps = [Capability("selfProfile", True, "/family/members/me"),          # no subject
+                Capability("peerDetail", False, "/family/members/PEER", subject="PEER")]
+        def probe(cap):
+            return R(Outcome.SERVED if cap.flag == "selfProfile" else Outcome.REFUSED, "x")
+        # a bystander that would "serve" everything it is asked about
+        r = run_authority_matrix(caps, probe, bystander=lambda cap: R(Outcome.REFUSED, "404"))
+        self.assertEqual([f for f in r.findings if "not scoped at all" in f.detail], [])
+        self.assertTrue(any("does not address a named subject" in w for w in r.withheld))
+
+    def test_a_subject_bearing_route_still_gets_its_bystander_probe(self):
+        from tpihunter.authority import Capability, Outcome, run_authority_matrix
+        class R:
+            def __init__(s, o, e=""): s.outcome, s.evidence = o, e
+        caps = [Capability("granted", True, "/x/ME", subject="ME"),
+                Capability("peerDetail", False, "/family/members/PEER", subject="PEER")]
+        def probe(cap): return R(Outcome.SERVED if cap.granted else Outcome.REFUSED, "x")
+        r = run_authority_matrix(caps, probe, bystander=lambda cap: R(Outcome.SERVED, "200"))
         self.assertTrue(any("not scoped at all" in f.detail for f in r.findings))
 
     def test_a_route_that_never_answered_is_not_evidence_of_enforcement(self):

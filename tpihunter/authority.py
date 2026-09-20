@@ -44,11 +44,19 @@ class Outcome(str, Enum):
 
 @dataclass(frozen=True)
 class Capability:
-    """A capability the server declared, and the route it governs."""
+    """A capability the server declared, and the route it governs.
+
+    `subject` is the principal the route addresses, and it is what makes a bystander test
+    well defined. A route like `/family/members/me` names no one, so substituting an
+    unrelated principal into it is impossible — and a bystander probe that silently fails
+    to substitute just re-fetches the actor's OWN resource, which serves, and reads as
+    "this route is not scoped at all". That false AUTHZ-1 fired on the first live run.
+    """
     flag: str
     granted: bool
     route: str
     label: str = ""
+    subject: Optional[str] = None
 
 
 @dataclass
@@ -138,7 +146,16 @@ def run_authority_matrix(capabilities: list,
                     f"the flag is not the check that guards the route."))
 
     if bystander is not None:
+        skipped = [c.flag for c in capabilities
+                   if not (c.subject and c.subject in c.route)]
+        if skipped:
+            res.withheld.append(
+                f"no bystander probe possible for {', '.join(sorted(skipped))}: the route "
+                f"does not address a named subject, so an unrelated principal cannot be "
+                f"substituted into it")
         for cap in capabilities:
+            if not (cap.subject and cap.subject in cap.route):
+                continue
             out = _run(bystander, cap)
             if out.outcome is Outcome.SERVED:
                 res.findings.append(AuthorityFinding(
