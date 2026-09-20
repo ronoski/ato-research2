@@ -23,7 +23,13 @@ Found live: on one aged session, `/login_id/edit` and `/login_method` answered `
 their mutation forms directly. Every one of those changes *who can authenticate as this
 account*, which is what makes them comparable at all.
 
-Four controls, because the naive version of this mode is a false-positive generator:
+Five controls, because the naive version of this mode is a false-positive generator —
+and the fifth was learned the hard way, by this mode producing a false positive on its
+first live run. `/passkey` rendered its page on an aged session while `/login_id/edit`
+answered `302 /reauthenticate`, which looked exactly like the clause being broken. It was
+not. `/passkey` is an *index*: its primary control points at `/passkey/register`, and that
+route redirects to re-authentication like the others. An index page compared against a
+mutation route manufactures an asymmetry out of nothing.
 
   * **Liveness (positive).** A logged-out page also shows no password prompt. So a
     reading counts only if the response carried a value that only an authenticated view
@@ -37,6 +43,10 @@ Four controls, because the naive version of this mode is a false-positive genera
     password, which is not a bug and is not what the clause says.
   * **Conclusiveness.** An asymmetry needs at least one refusal and one acceptance, all
     conclusive. Errors and unknowns never become evidence of an absence.
+  * **Route kind.** Only a route that *performs* the mutation may be compared. A page that
+    merely links to one proves nothing by rendering, and the config blob that names these
+    URIs does not distinguish the two — so the caller must, and an unmarked route is
+    excluded rather than assumed.
 """
 from __future__ import annotations
 
@@ -57,6 +67,13 @@ PROFILE_DATA = "profile-data"
 DEFAULT_MIN_AGE = 900.0          # 15 minutes; below this a freshness window explains it
 
 
+class Kind(str, Enum):
+    """Whether a route performs the mutation or only links to it."""
+    MUTATION = "mutation"     # the route that performs the change — the only comparable kind
+    INDEX = "index"           # a page listing the capability; rendering proves nothing
+    UNKNOWN = "unknown"       # not established — excluded, never assumed
+
+
 class Level(str, Enum):
     DEMANDED = "demanded"            # the surface refused this provenance and asked for more
     NOT_DEMANDED = "not-demanded"    # the surface performed/offered the transition as-is
@@ -70,6 +87,7 @@ class Transition:
     label: str
     privilege: str
     note: str = ""
+    kind: Kind = Kind.UNKNOWN
 
 
 @dataclass
@@ -159,9 +177,19 @@ def run_stepup(transitions: list, probe: Callable[[Transition], Reading],
             f"would explain any asymmetry, so no TPI-6 verdict is issued")
         return res
 
+    # Only an excluded route that ACCEPTED needs explaining: that is the one that would
+    # have manufactured a false asymmetry. An index that refuses adds nothing either way.
+    skipped = sorted({c.transition.id for c in res.cells
+                      if c.conclusive and c.transition.kind is not Kind.MUTATION
+                      and c.level is Level.NOT_DEMANDED})
+    if skipped:
+        res.withheld.append(
+            f"excluded from comparison (not established as mutation routes): {', '.join(skipped)} "
+            f"— an index page proves nothing by rendering; probe the route its primary control targets")
+
     classes: dict = {}
     for c in res.cells:
-        if c.conclusive:
+        if c.conclusive and c.transition.kind is Kind.MUTATION:
             classes.setdefault(c.transition.privilege, []).append(c)
     for priv, cells in sorted(classes.items()):
         dem = [c.transition.id for c in cells if c.level is Level.DEMANDED]
@@ -174,18 +202,24 @@ def run_stepup(transitions: list, probe: Callable[[Transition], Reading],
 def nintendo_account_transitions() -> list:
     """The account-surface transitions recovered from the authenticated page's own config.
 
-    Kept as a worked example of the tagging that makes the mode sound: the first six all
-    change who can authenticate, which is why they may be compared with each other.
+    A worked example of both tags that make the mode sound. `privilege` says what may be
+    compared with what; `kind` says whether the route is even a transition. The config blob
+    hands over `passkey` and `2fa/authenticator`, but those are index pages — the routes
+    that mutate are one link deeper, and marking them MUTATION on the strength of the
+    config alone is how this mode produced its first false positive.
     """
     L = LOGIN_CREDENTIAL
+    M, I = Kind.MUTATION, Kind.INDEX
     return [
-        Transition("password/edit", "change password", L),
-        Transition("login_id/edit", "change login id", L),
-        Transition("login_method", "change login method", L),
-        Transition("passkey", "enrol a passkey", L, "a resident passkey logs in on its own"),
-        Transition("2fa/authenticator", "enrol/replace TOTP", L),
-        Transition("email/edit", "rebind email", L, "email owns the reset flow"),
-        Transition("phone_number", "bind phone", RECOVERY_CHANNEL),
-        Transition("withdraw/confirm", "delete account", ACCOUNT_LIFECYCLE),
-        Transition("profile/edit", "edit profile", PROFILE_DATA),
+        Transition("password/edit", "change password", L, kind=M),
+        Transition("login_id/edit", "change login id", L, kind=M),
+        Transition("login_method", "change login method", L, kind=M),
+        Transition("email/edit", "rebind email", L, "email owns the reset flow", kind=M),
+        Transition("passkey/register", "enrol a passkey", L,
+                   "a resident passkey logs in on its own", kind=M),
+        Transition("passkey", "passkey list", L, "index only — links to passkey/register", kind=I),
+        Transition("2fa/authenticator", "TOTP settings", L, "index only", kind=I),
+        Transition("phone_number", "phone settings", RECOVERY_CHANNEL, "index only", kind=I),
+        Transition("withdraw/confirm", "delete account", ACCOUNT_LIFECYCLE, kind=M),
+        Transition("profile/edit", "edit profile", PROFILE_DATA, kind=M),
     ]

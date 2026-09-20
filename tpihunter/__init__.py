@@ -46,7 +46,7 @@ from .identifiers import Variant, probe_identifier, variants
 from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
 from .credentials import CredentialSample, Shape, analyse, decode_jwt
 from .sessions import LoginLedger, NoSessionAvailable, Session, SessionStore
-from .stepup_matrix import (Asymmetry, Cell, Level, Reading, StepUpResult, Transition,
+from .stepup_matrix import (Asymmetry, Cell, Kind, Level, Reading, StepUpResult, Transition,
                      nintendo_account_transitions, run_stepup)
 from .surface import Baseline, Surface, catchall_baseline, render_table, triage
 from .race import RaceOutcome, RaceSpec, RaceVerdict, max_overlap, run_race
@@ -88,7 +88,7 @@ __all__ = [
     "CredentialSample", "Shape", "analyse", "decode_jwt",
     "Surface", "Baseline", "triage", "catchall_baseline", "render_table",
     "SessionStore", "Session", "LoginLedger", "NoSessionAvailable",
-    "run_stepup", "Transition", "Reading", "Level", "Asymmetry", "StepUpResult",
+    "run_stepup", "Transition", "Reading", "Level", "Kind", "Asymmetry", "StepUpResult",
     "nintendo_account_transitions",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",

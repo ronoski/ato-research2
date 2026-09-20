@@ -193,18 +193,30 @@ transitions of equal privilege disagreeing*. A surface that re-authenticates bef
 login-id change and not before enrolling a passkey has not decided anything; it has left
 a flow behind, and whoever holds a session cookie takes the one that does not ask.
 
-Measured live on one aged session:
+Measured live on one aged session — and the first run was **wrong**, which is the useful
+part. `/passkey` and `/2fa/authenticator` rendered their pages while `/login_id/edit`
+answered `302 /reauthenticate`, which looks exactly like the clause breaking. It is not:
+those two are *index* pages. The routes their buttons target tell a different story.
 
 ```
-transition         privilege          step-up        evidence
-login_id/edit      login-credential   demanded       302 /reauthenticate
-login_method       login-credential   demanded       302 /reauthenticate
-passkey            login-credential   not-demanded   rendered form
-2fa/authenticator  login-credential   not-demanded   rendered form
-profile/edit       profile-data       not-demanded   rendered form
+transition                privilege          step-up        evidence
+login_id/edit             login-credential   demanded       302 -> /reauthenticate
+login_method              login-credential   demanded       302 -> /reauthenticate
+passkey/register          login-credential   demanded       302 -> /reauthenticate
+2fa/authenticator/enable  login-credential   demanded       302 -> /reauthenticate
+passkey                   login-credential   not-demanded   rendered 200   (index)
+profile/edit              profile-data       not-demanded   rendered 200
 ```
 
-Four controls, because the naive version of this mode is a false-positive generator:
+Every conclusive mutation route in the class agrees, so the verdict is **no finding** —
+and the mode says why it discarded the index pages rather than silently dropping them.
+
+One measurement trap worth keeping: on this surface `/reauthenticate` itself hangs, so
+every route that redirects to it appears to time out. A probe that judges on whether the
+navigation settled marks all four refusals inconclusive and leaves only the index pages
+looking exploitable. Judge on the redirect event, not the page load.
+
+Five controls, because the naive version of this mode is a false-positive generator:
 
 * **Liveness (positive).** A logged-out page shows no password prompt either — so without
   a marker that only an authenticated view of *this* principal renders, "no step-up" is
@@ -218,6 +230,10 @@ Four controls, because the naive version of this mode is a false-positive genera
   the mode "discovers" that editing a nickname needs less proof than changing a password.
 * **Conclusiveness.** A finding needs a refusal *and* an acceptance, both conclusive. A
   timeout or a raised probe never becomes evidence of an absence.
+* **Route kind.** Only a route that *performs* the mutation may be compared. A page that
+  links to one proves nothing by rendering, and the config blob naming these URIs does not
+  distinguish the two — so the caller marks each `Kind.MUTATION` or `Kind.INDEX`, and an
+  unmarked route is excluded rather than assumed.
 
 ## Credential structure (the fifth mode)
 

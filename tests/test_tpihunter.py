@@ -2874,12 +2874,13 @@ class TestStepUpMatrix(unittest.TestCase):
     def test_equal_privilege_disagreement_is_a_tpi6_finding(self):
         from tpihunter.stepup_matrix import Level, run_stepup
         r = run_stepup(self._t(), self._probe({
-            "login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}), session_age=7200)
+            "login_id/edit": Level.DEMANDED,
+            "passkey/register": Level.NOT_DEMANDED}), session_age=7200)
         self.assertEqual(len(r.findings), 1)
         f = r.findings[0]
         self.assertEqual(f.clause_id, "TPI-6")
         self.assertEqual(f.privilege, "login-credential")
-        self.assertIn("passkey", f.accepted)
+        self.assertIn("passkey/register", f.accepted)
         self.assertIn("login_id/edit", f.demanded)
 
     def test_different_privilege_classes_are_not_compared(self):
@@ -2896,11 +2897,11 @@ class TestStepUpMatrix(unittest.TestCase):
         exploitable cell on the board."""
         from tpihunter.stepup_matrix import Level, run_stepup
         r = run_stepup(self._t(), self._probe(
-            {"login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}, seen=False),
+            {"login_id/edit": Level.DEMANDED, "passkey/register": Level.NOT_DEMANDED}, seen=False),
             session_age=7200)
         self.assertEqual(r.findings, [])
         self.assertTrue(any("logged out" in w for w in r.withheld))
-        cell = [c for c in r.cells if c.transition.id == "passkey"][0]
+        cell = [c for c in r.cells if c.transition.id == "passkey/register"][0]
         self.assertIs(cell.level, Level.INCONCLUSIVE)
 
     def test_a_demanded_reading_needs_no_liveness_marker(self):
@@ -2917,7 +2918,8 @@ class TestStepUpMatrix(unittest.TestCase):
         login is about being freshly logged in, not about provenance."""
         from tpihunter.stepup_matrix import Level, run_stepup
         r = run_stepup(self._t(), self._probe({
-            "login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}), session_age=60)
+            "login_id/edit": Level.DEMANDED,
+            "passkey/register": Level.NOT_DEMANDED}), session_age=60)
         self.assertEqual(r.findings, [])
         self.assertTrue(any("freshness window" in w for w in r.withheld))
 
@@ -2929,10 +2931,42 @@ class TestStepUpMatrix(unittest.TestCase):
     def test_uniform_refusal_is_not_a_finding(self):
         from tpihunter.stepup_matrix import Level, run_stepup
         r = run_stepup(self._t(), self._probe({
-            "login_id/edit": Level.DEMANDED, "passkey": Level.DEMANDED,
+            "login_id/edit": Level.DEMANDED, "passkey/register": Level.DEMANDED,
             "password/edit": Level.DEMANDED}), session_age=7200)
         self.assertEqual(r.findings, [])
         self.assertIn("agree", r.render())
+
+    def test_an_index_page_is_not_compared_against_a_mutation_route(self):
+        """The false positive this mode produced on its first live run. `/passkey` renders
+        on an aged session while `/login_id/edit` answers 302 /reauthenticate — which looks
+        exactly like the clause breaking. It is not: `/passkey` is an index, and the route
+        its button targets, `/passkey/register`, redirects to re-authentication too."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "login_id/edit": Level.DEMANDED,
+            "passkey": Level.NOT_DEMANDED,            # the index
+            "passkey/register": Level.DEMANDED,       # the route that mutates
+        }), session_age=9000)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("index page proves nothing" in w for w in r.withheld))
+
+    def test_an_unmarked_route_is_excluded_rather_than_assumed(self):
+        from tpihunter.stepup_matrix import Kind, Level, Transition, run_stepup
+        ts = [Transition("a/edit", "change", "login-credential", kind=Kind.MUTATION),
+              Transition("b", "unknown route", "login-credential")]   # kind defaults UNKNOWN
+        r = run_stepup(ts, self._probe({"a/edit": Level.DEMANDED, "b": Level.NOT_DEMANDED}),
+                       session_age=9000)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("not established as mutation routes" in w for w in r.withheld))
+
+    def test_two_real_mutation_routes_disagreeing_is_still_a_finding(self):
+        """The control must not smother the signal it was added to filter."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "login_id/edit": Level.DEMANDED, "passkey/register": Level.NOT_DEMANDED}),
+            session_age=9000)
+        self.assertEqual(len(r.findings), 1)
+        self.assertIn("passkey/register", r.findings[0].accepted)
 
     def test_a_probe_that_raises_is_inconclusive_not_evidence(self):
         from tpihunter.stepup_matrix import Level, run_stepup
