@@ -2707,6 +2707,31 @@ class TestSurfaceTriage(unittest.TestCase):
         # so does a different status
         self.assertTrue(base.distinct(403, CATCHALL))
 
+    def test_testability_gates_exploitability(self):
+        """The correction this made to itself. Its first run ranked a legacy identity
+        system on a dev host top — and that surface turned out untestable: we hold no
+        account on it and its only unauthenticated flows MAIL their result to the
+        registered owner, so every probe with an identifier we do not own touches a third
+        party. Juicy and unreachable is worth zero."""
+        juicy = self._s(host="game-dev.id.example.net", status=200,
+                        principals=0, can_enrol=False)
+        ordinary = self._s(host="accounts.example.com", status=200,
+                           sets_cookie=("SID",), principals=3)
+        self.assertGreater(ordinary.score, juicy.score)
+        self.assertTrue(any("NO PRINCIPAL" in x for x in juicy.signals))
+        self.assertTrue(any("two-principal modes runnable" in x for x in ordinary.signals))
+
+    def test_one_principal_allows_own_account_modes_only(self):
+        one = self._s(host="a.example", status=200, sets_cookie=("S",), principals=1)
+        two = self._s(host="b.example", status=200, sets_cookie=("S",), principals=2)
+        self.assertGreater(two.score, one.score)
+        self.assertTrue(any("own-account modes only" in x for x in one.signals))
+
+    def test_an_available_enrolment_path_beats_no_principal_at_all(self):
+        enrol = self._s(host="a.example", status=200, can_enrol=True)
+        none_ = self._s(host="b.example", status=200, can_enrol=False)
+        self.assertGreater(enrol.score, none_.score)
+
     def test_the_baseline_path_is_unguessable_so_it_cannot_be_special_cased(self):
         from tpihunter.surface import catchall_baseline
         seen = []

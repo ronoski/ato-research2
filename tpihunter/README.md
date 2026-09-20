@@ -157,6 +157,20 @@ Run against the Nintendo estate it put two `-dev` identity surfaces at the top a
 surfaced three auth systems that had never been probed — a Spring Security developer
 portal, a legacy Nintendo Network login, and an internal NDID console.
 
+**Testability gates exploitability.** Every mode here needs at least one account under
+our control, and the two-principal modes need two. A surface we cannot lawfully obtain a
+principal on is worth nothing however exploitable it looks — `Surface(principals=, can_enrol=)`
+multiplies the score down and records why. This correction came from the triage's own
+first run: it ranked a legacy identity system on a `-dev` host top, and that surface turned
+out untestable, because its only unauthenticated flows **mail their result to the
+registered owner**, so every probe with an identifier we do not own touches a third party.
+
+Applied, it reorders the estate honestly — the three hosts where accounts are held come
+first, and eight identity surfaces that looked like the best targets drop to single
+digits. It also names the engagement's real blocker, which is not methodology or recon
+but **principal acquisition**: obtaining accounts on the high-value surfaces is an
+operator action, and until it happens those surfaces cannot be hunted at all.
+
 **The catch-all control.** A path is "reachable" only if it says something the app does not
 already say for a path that certainly does not exist. `catchall_baseline()` fetches an
 unguessable nonsense path and every other response must clear that floor. Measured live: a

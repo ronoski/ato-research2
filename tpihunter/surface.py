@@ -41,6 +41,11 @@ class Surface:
     json_api: bool = False
     reachable: bool = False
     signals: list = field(default_factory=list)
+    # Can we hold a principal here? Every mode in this framework needs at least one
+    # account under our control, and the two-principal modes need two. A surface we
+    # cannot lawfully obtain an account on is worth nothing however exploitable it looks.
+    principals: int = 0          # accounts we already hold on this surface
+    can_enrol: Optional[bool] = None   # is there a registration path we may use?
     score: int = 0
 
     def render(self) -> str:
@@ -69,7 +74,15 @@ def characterise(url: str, send: Callable) -> Surface:
 
 
 def score(s: Surface) -> Surface:
-    """Rank by how likely the modes are to find something, with the reason recorded."""
+    """Rank by how likely the modes are to find something, with the reason recorded.
+
+    Exploitability is only half of it. The other half is TESTABILITY, and ignoring it is
+    a mistake this function made on its first real run: it put a legacy identity system on
+    a dev host at the top of the list, and that surface turned out to be untestable — we
+    hold no account on it, its only unauthenticated flows MAIL their result to the
+    registered owner, so every probe with an identifier we do not own touches a third
+    party. Juicy and unreachable is worth zero.
+    """
     pts = 0
     host = s.host.lower()
 
@@ -101,6 +114,20 @@ def score(s: Surface) -> Surface:
     if s.status in (404, 501):
         pts -= 5
         s.signals.append("no root handler")
+
+    # -- testability, applied last because it gates everything above ----------
+    if s.principals >= 2:
+        s.signals.append(f"{s.principals} principals held — two-principal modes runnable")
+    elif s.principals == 1:
+        pts = int(pts * 0.6)
+        s.signals.append("1 principal held — own-account modes only (matrix, credentials)")
+    elif s.can_enrol:
+        pts = int(pts * 0.5)
+        s.signals.append("no principal yet, but enrolment is available")
+    else:
+        pts = int(pts * 0.15)
+        s.signals.append("NO PRINCIPAL and no enrolment path — untestable for ATO however "
+                         "exploitable it looks; probing it would touch third parties")
 
     s.score = pts
     return s
