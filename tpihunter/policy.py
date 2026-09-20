@@ -113,6 +113,7 @@ class EngagementPolicy:
     identifiers: frozenset = frozenset()         # account identifiers in scope
     hosts: frozenset = frozenset()               # in-scope entries (see the matching rules below)
     excluded: frozenset = frozenset()            # entries that are OUT of scope; these always win
+    asset_rules: dict = field(default_factory=dict)   # per-entry overrides; see `rules_for`
     allow_credential_change: bool = False        # resets, email changes, factor enrolment
     allow_cross_principal_write: bool = False    # the oracle's destructive write probe
     max_actions: int = 500                       # hard cap; fails closed
@@ -176,6 +177,35 @@ class EngagementPolicy:
         return None if value in self.identifiers else (
             f"identifier {value!r} is not in the authorized scope for '{self.name}' "
             f"({len(self.identifiers)} identifier(s) in scope)")
+
+    def rules_for(self, url: str) -> dict:
+        """The rules that apply to one URL, merged most-restrictive-first.
+
+        A real programme does not set one rule for the whole estate. It says "limit
+        testing to 100 requests/minute" on this asset and "please do not register for
+        accounts as this is a production site" on that one — and a policy that can only
+        express a single global rate either over-restricts the whole engagement or
+        violates the one asset that asked for something specific.
+
+        Where several entries match, the strictest value wins: the lowest rate, and any
+        prohibition. A rule is never relaxed by a second matching entry."""
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        paths = _path_readings(parts.path or "/")
+        merged: dict = {}
+        for entry, rules in self.asset_rules.items():
+            if not _entry_matches(host, paths, entry):
+                continue
+            for key, value in (rules or {}).items():
+                if key == "min_interval":
+                    merged[key] = max(float(value), float(merged.get(key, 0.0)))
+                elif key.startswith("no_") or key.startswith("forbid"):
+                    merged[key] = bool(value) or bool(merged.get(key, False))
+                else:
+                    merged.setdefault(key, value)
+        if self.min_interval:
+            merged["min_interval"] = max(merged.get("min_interval", 0.0), self.min_interval)
+        return merged
 
     def check_host(self, host: str) -> Optional[str]:
         """The COARSE question: could this host ever be in scope, at any path?

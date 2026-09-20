@@ -110,7 +110,7 @@ class ScopedTransport:
             raise BudgetExhausted(
                 f"engagement '{self.policy.name}' hit its budget of "
                 f"{self.policy.max_actions} requests; stopping rather than continuing")
-        self._throttle()
+        self._throttle(self.policy.rules_for(url).get("min_interval", 0.0))
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("User-Agent", _USER_AGENT)
         for k, v in headers.items():
@@ -140,8 +140,10 @@ class ScopedTransport:
                        note=f"{status}" + (" (response truncated)" if truncated else ""))
         return Response(status, headers, cookies, text, truncated)
 
-    def _throttle(self) -> None:
-        gap = self.policy.min_interval
+    def _throttle(self, gap: float = 0.0) -> None:
+        """`gap` is the per-asset minimum from the policy, already merged with the global
+        one — an asset that asked for 100 requests/minute gets 0.6s whatever the rest of
+        the engagement runs at."""
         if gap <= 0:
             return
         wait = self._last + gap - time.monotonic()
@@ -179,6 +181,16 @@ class LiveAdapter:
                 f"{sorted(missing)}")
         if policy.check_host(profile.host):
             raise ScopeViolation(f"profile host {profile.host!r} is not in the policy's scope")
+        rules = policy.rules_for(profile.base_url + "/")
+        if rules.get("no_registration") and "register" in profile.actions:
+            # Refused at construction, not at request time: an asset whose instructions say
+            # "do not register for accounts as this is a production site" must not be
+            # reachable by a probe that opens with `register`, and noticing that mid-hunt
+            # is one request too late.
+            raise ScopeViolation(
+                f"the engagement forbids account registration on {profile.host!r} "
+                f"({rules.get('note') or 'per-asset instruction'}); remove the `register` "
+                f"action from the profile, or point it at an asset that permits it")
         self.profile = profile
         self.policy = policy
         self.audit = audit if audit is not None else AuditLog()

@@ -15,6 +15,7 @@ The pieces:
   live         LiveAdapter: drives that profile over HTTP, scope enforced per request
   validate     validate_target(): prove the profile works before trusting a verdict
   http_mock    the vulnerable mock behind a real socket, plus a worked example profile
+  h1_scope     build an engagement file from a HackerOne scope export
   policy       EngagementPolicy + guard(): rules of engagement enforced per action
   redact       secret scrubbing for anything the tool emits
   creds        per-run credentials and identifiers (never literals in source)
@@ -29,6 +30,7 @@ from .flaky import FlakyAdapter
 from .harness import Plan, Step, execute_action, run_plan
 from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
                      default_mints, default_mutations, run_cell)
+from .h1_scope import from_hackerone_csv, parse_instruction
 from .live import LiveAdapter, ScopedTransport, live_adapter
 from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
                      PolicyViolation, ScopeViolation, for_mock, guard, policy_report)
@@ -58,6 +60,7 @@ __all__ = [
     "EngagementPolicy", "GuardedAdapter", "AuditLog", "guard", "for_mock", "policy_report",
     "PolicyViolation", "ScopeViolation", "BudgetExhausted", "redact",
     "TargetProfile", "ProfileError", "LiveAdapter", "ScopedTransport", "live_adapter",
+    "from_hackerone_csv", "parse_instruction",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",

@@ -212,6 +212,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
 | `validate.py` | `validate_target()` — prove the profile works before any verdict from it counts |
 | `http_mock.py` | the vulnerable mock behind a real socket (loopback only), plus the worked example profile |
+| `h1_scope.py` | build an engagement file from a HackerOne scope export — scope is generated, never transcribed |
 | `policy.py` | **rules of engagement as data** — `EngagementPolicy` + `guard()`: scope allowlists, destructive-action gates, budget, dry run, audit log |
 | `redact.py` | secret scrubbing for everything the tool emits (reports, audit trail) |
 | `creds.py` | per-run credentials and identifiers — never literals in source |
@@ -245,6 +246,30 @@ python3 -m tpihunter.live_demo
 starts the vulnerable mock on a loopback HTTP port, describes it with a `TargetProfile`,
 validates the description, and then runs the ordinary hunt against it — finding the same
 TPI-1 and TPI-4, with the same minimal repros, through sockets and cookies and JSON.
+
+### Getting the scope right
+
+Transcribing a programme's scope by hand is where an engagement acquires a host it was
+never granted, so generate it:
+
+```
+python3 -m tpihunter.h1_scope scopes_for_<programme>_at_<ts>.csv <name> > engagement.json
+```
+
+It preserves path-scoped entries, carries exclusions across (they beat inclusions), and
+turns each asset's **instruction** into a rule — `"limit testing to 100 requests/minute"`
+becomes a per-asset `min_interval`, `"please do not register for accounts as this is a
+production site"` becomes `no_registration`, which makes a profile declaring a `register`
+action **refuse to construct** for that asset. The strictest per-asset rate becomes the
+floor for the whole engagement, so an asset with no instruction is never tested faster
+than the most fragile one the programme named.
+
+Anything it could not parse goes to a `review` list on stderr rather than being dropped —
+"the generator ignored it" and "the programme said nothing" must never look the same. On a
+real export that list caught an asset requiring test accounts be prefixed `vrp_`.
+
+It does not fill in `identifiers`: the accounts a tool may act on are the ones you created,
+and no export knows them. `preflight()` refuses until you replace the placeholders.
 
 ### Who authorizes what
 

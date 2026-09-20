@@ -1824,5 +1824,92 @@ class TestNaturalCanaryOverHttp(unittest.TestCase):
         self.assertEqual(writes, [], f"natural mode issued writes: {[r.action for r in writes]}")
 
 
+class TestHackerOneScopeImport(unittest.TestCase):
+    """A programme's published scope is the authoritative statement of what may be
+    touched. Transcribing it by hand is where an engagement acquires a host it was never
+    granted, so the engagement file is generated from the export."""
+
+    CSV = ("identifier,asset_type,instruction,eligible_for_bounty,eligible_for_submission\n"
+           "a.example,URL,Please limit testing to 100 requests/minute due to db.,true,true\n"
+           "https://b.example/app/,URL,Please limit testing to 2 requests per second.,true,true\n"
+           "c.example,URL,Please do not register for accounts as this is a production site.,true,true\n"
+           "d.example,URL,,true,true\n"
+           "e.example,URL,Only branded content is in scope. All other content is OOS.,true,true\n"
+           "f.example,URL,Accounts must be prefixed with vrp_ for identification.,false,false\n")
+
+    def _write(self):
+        import pathlib as _p, tempfile
+        path = _p.Path(tempfile.mkdtemp()) / "scopes.csv"
+        path.write_text(self.CSV)
+        return str(path)
+
+    def test_instructions_become_rules(self):
+        from tpihunter.h1_scope import parse_instruction
+        self.assertEqual(parse_instruction("limit to 100 requests/minute")[0]["min_interval"], 0.6)
+        self.assertEqual(parse_instruction("100 requests per minute or less")[0]["min_interval"], 0.6)
+        self.assertEqual(parse_instruction("2 requests per second")[0]["min_interval"], 0.5)
+        self.assertTrue(parse_instruction("Please do not register for accounts here.")[0]
+                        ["no_registration"])
+
+    def test_an_unrecognised_instruction_is_surfaced_not_dropped(self):
+        from tpihunter.h1_scope import parse_instruction
+        rules, unparsed = parse_instruction("Accounts must be prefixed with vrp_.")
+        self.assertEqual(rules, {})
+        self.assertIn("vrp_", unparsed)
+        # a phrase with no operational constraint does not clutter the review list
+        self.assertIsNone(parse_instruction("Other languages at fr-support.")[1])
+
+    def test_export_becomes_a_usable_engagement(self):
+        from tpihunter.h1_scope import from_hackerone_csv
+        from tpihunter.policy import EngagementPolicy
+        eng, review = from_hackerone_csv(self._write(), name="p", authorized_by="ticket-1")
+        self.assertEqual(sorted(eng["hosts"]),
+                         ["a.example", "c.example", "d.example", "e.example",
+                          "https://b.example/app/"])
+        self.assertEqual(eng["excluded"], ["f.example"])
+        self.assertEqual(eng["min_interval"], 0.6)        # the strictest asset sets the floor
+        self.assertFalse(eng["allow_cross_principal_write"])
+        self.assertTrue(any("vrp_" in r["instruction"] for r in review))
+
+        policy = EngagementPolicy.from_dict({**eng, "identifiers": ["me@x.example"]})
+        self.assertEqual(policy.preflight(), [])
+        self.assertIsNone(policy.check_url("https://b.example/app/x"))
+        self.assertIsNotNone(policy.check_url("https://b.example/elsewhere"))
+        self.assertIsNotNone(policy.check_url("https://f.example/"))     # excluded wins
+
+    def test_per_asset_rules_merge_most_restrictive_first(self):
+        from tpihunter.policy import EngagementPolicy
+        p = EngagementPolicy(name="p", authorized_by="x",
+                             identifiers=frozenset({"a@b.example"}),
+                             hosts=frozenset({"a.example", "*.a.example"}), min_interval=0.2,
+                             asset_rules={"a.example": {"min_interval": 0.6},
+                                          "*.a.example": {"min_interval": 1.5,
+                                                          "no_registration": True}})
+        self.assertEqual(p.rules_for("https://a.example/")["min_interval"], 0.6)
+        sub = p.rules_for("https://x.a.example/")
+        self.assertEqual(sub["min_interval"], 1.5)        # slowest wins
+        self.assertTrue(sub["no_registration"])           # any prohibition wins
+        # the global floor still applies where no asset rule matches
+        self.assertEqual(EngagementPolicy(name="p", authorized_by="x",
+                                          identifiers=frozenset({"a@b.example"}),
+                                          hosts=frozenset({"z.example"}), min_interval=0.9)
+                         .rules_for("https://z.example/")["min_interval"], 0.9)
+
+    def test_a_no_registration_asset_refuses_a_profile_that_registers(self):
+        from tpihunter.http_mock import engagement_for, profile_for, serve
+        from tpihunter.live import LiveAdapter
+        from tpihunter.policy import EngagementPolicy, ScopeViolation
+        from tpihunter.profile import TargetProfile
+        with serve() as url:
+            raw = engagement_for(url)
+            raw["asset_rules"] = {"127.0.0.1": {"no_registration": True,
+                                                "note": "production site"}}
+            policy = EngagementPolicy.from_dict(raw)
+            prof = TargetProfile.from_dict(profile_for(url))
+            with self.assertRaises(ScopeViolation) as cm:
+                LiveAdapter(prof, policy)
+            self.assertIn("forbids account registration", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
