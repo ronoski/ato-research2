@@ -290,6 +290,44 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## TPI-1 measured live: an e-mail rebind revokes nothing
+
+The clause this project is named for, finally exercised against a live target.
+
+> **TPI-1 (revoke-on-rebind).** An identity-mutating transition — e-mail/phone change,
+> verification, or account merge — must re-assert justification for every binding on the
+> row and revoke those it can no longer justify.
+
+Measured on an account we own, with the transition witnessed rather than assumed:
+
+```
+PRE-REBIND    session cookie -> works      OIDC access_token -> works     (positive controls)
+TRANSITION    e-mail rebound to a new address, code delivered there, confirmed
+              witness: config email is the NEW address, emailVerified=true
+POST-REBIND   session cookie -> works      OIDC access_token -> works
+NEGATIVE      never-issued bearer -> 401   (so the endpoint does authenticate)
+```
+
+Both bindings that predate the rebind survive it. **The revocation machinery exists and
+works** — logout, sign-out-all-devices and password change were all measured REVOKED on
+this same target earlier — so this is not an absent capability. An e-mail rebind simply
+does not trigger it.
+
+**Severity, stated honestly.** This is not account takeover and it is not novel: most
+providers do not revoke sessions on an e-mail change, and here the standard remediation
+(password change) *does* revoke. What it does mean is that **an e-mail rebind is not a
+containment action**. A user who discovers their address has been changed, changes it
+back, and believes they have recovered the account has not evicted anyone: the intruder's
+session and any outstanding access token keep working, and they can simply rebind again.
+The recovery channel moved; the credentials that were minted against the old one did not.
+
+**Why it took the whole engagement to reach.** Step-up has a *freshness window*. A session
+seconds old is served `/email/edit` directly; an hours-old one is bounced to
+`/reauthenticate`, which is genuinely bot-blocked. Every earlier probe used an aged
+session, hit the bounce, and was recorded as "the binding surface is blocked". `stepup_matrix`
+ships a `min_age` control written for precisely this phenomenon — the mode knew, the
+operator did not.
+
 ## When one blocker wears four disguises (the step-up wall)
 
 Four separate "results" were recorded against this target over several hours:
