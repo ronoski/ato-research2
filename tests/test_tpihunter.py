@@ -2046,10 +2046,43 @@ class TestMutationControl(unittest.TestCase):
         logout = next(m for m in default_mutations(EMAIL) if m.id == "logout")
         survived = self._cell(logout)                       # logout does not revoke by default
         self.assertEqual(survived.survival, Survival.SURVIVED)
-        self.assertEqual(survived.mutation_verified, "verified")
+        self.assertEqual(survived.mutation_verified, "witnessed")
         revoked = self._cell(logout, revokes={"logout"})
         self.assertEqual(revoked.survival, Survival.REVOKED)
-        self.assertEqual(revoked.mutation_verified, "verified")
+        self.assertEqual(revoked.mutation_verified, "witnessed")
+
+    def test_a_witness_that_does_not_move_beats_a_verify_that_claims_success(self):
+        """The control that would have caught both false SURVIVEDs this framework produced
+        against a real target. A boolean is a claim and code can claim without looking; a
+        witness has to be read twice, and an unchanged reading is indistinguishable from a
+        mutation that never ran."""
+        from tpihunter.matrix import MutationSpec, Survival
+        lying = MutationSpec(
+            "noop", (("noop_logout", {}),), "a mutation that changes nothing",
+            verify=lambda a, p: True,                      # claims success
+            witness=lambda a, p: a.whoami(p).identity)     # but nothing moved
+
+        class ConfirmationPage(MockAdapter):
+            def noop_logout(self, p):
+                from tpihunter.types import Observation
+                return Observation(True, note="confirmation page rendered")
+
+        from tpihunter.matrix import run_cell
+        owner = Principal("owner")
+        v = run_cell(lambda: ConfirmationPage(control={owner.name: {EMAIL}}),
+                     self.MINT, lying, owner)
+        self.assertEqual(v.survival, Survival.INCONCLUSIVE)
+        self.assertIn("left the witness unchanged", v.note)
+        self.assertFalse(v.is_finding)
+
+    def test_an_unreadable_witness_is_inconclusive_not_assumed(self):
+        from tpihunter.matrix import MutationSpec, Survival, run_cell
+        def boom(a, p): raise RuntimeError("cannot read")
+        m = MutationSpec("logout", (("logout", {}),), "logout", witness=boom)
+        owner = Principal("owner")
+        v = run_cell(lambda: MockAdapter(control={owner.name: {EMAIL}}), self.MINT, m, owner)
+        self.assertEqual(v.survival, Survival.INCONCLUSIVE)
+        self.assertIn("could not be read", v.note)
 
     def test_a_cell_without_a_verifier_says_so_rather_than_implying_one(self):
         from tpihunter.matrix import MutationSpec, Survival

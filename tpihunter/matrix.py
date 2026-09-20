@@ -77,6 +77,19 @@ class MutationSpec:
     # False (it did not), None (cannot tell). Without it a cell can only check that the
     # mutation's steps reported success, which is not the same thing — see run_cell.
     verify: Optional[object] = None
+    # STRONGER mutation control, and the one to prefer: witness(adapter, principal) returns
+    # an observable that the mutation MUST change — the account's email after a rebind, the
+    # count of live devices after a sign-out-all. run_cell reads it before and after and
+    # requires the two to differ.
+    #
+    # Why this rather than `verify`: a boolean is a claim, and a claim can be made by code
+    # that did not look. Both false SURVIVED verdicts this framework has produced against a
+    # real target came from a caller asserting "the mutation happened" — once from a /logout
+    # page that only *offered* to log out, once from a flag that overrode a control which had
+    # already reported failure. A witness cannot be asserted; it has to be read twice, and
+    # an unchanged reading is indistinguishable from a mutation that never ran, which is
+    # exactly the verdict the cell should give.
+    witness: Optional[object] = None
 
 
 @dataclass
@@ -121,8 +134,8 @@ def default_mutations(email: str) -> list[MutationSpec]:
     return [
         MutationSpec("logout", (("logout", {}),), "logout",
                      revokes_kinds=frozenset({"session"}),
-                     # the acting context must itself stop authenticating
-                     verify=lambda a, p: not a.whoami(p).ok),
+                     # witness: the acting context's own identity must stop resolving
+                     witness=lambda a, p: a.whoami(p).identity),
         # NOTE on `factor` here, learned on a live target. A passkey surviving a password
         # change is STANDARD WebAuthn behaviour — the credential is deliberately independent
         # of the password — so asserting it as an obligation makes this cell fire on every
@@ -138,6 +151,18 @@ def default_mutations(email: str) -> list[MutationSpec]:
         MutationSpec("email_change", (("email_change", {"new_email": "rebound@corp.example"}),),
                      "email change", revokes_kinds=frozenset({"session"})),
     ]
+
+
+_WITNESS_ERROR = object()
+
+
+def _read_witness(mutation: MutationSpec, adapter, principal):
+    if mutation.witness is None:
+        return None
+    try:
+        return mutation.witness(adapter, principal)
+    except Exception:
+        return _WITNESS_ERROR
 
 
 def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: MutationSpec,
@@ -183,6 +208,10 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
     # logs nobody out. The binding then "survives" a mutation that never occurred, and
     # every cell reads SURVIVED — a false Critical, produced by a measurement that never
     # ran. A cell may only report on a mutation it can show took effect.
+    # Read the witness BEFORE the mutation runs — an unchanged reading is only meaningful
+    # if the "before" was taken before. (Getting this order wrong makes every cell
+    # INCONCLUSIVE, which the suite caught immediately.)
+    witness_before = _read_witness(mutation, a, principal)
     outs = [execute_action(a, principal, action, params) for action, params in mutation.steps]
     failed = [o for o in outs if o is not None and not getattr(o, "ok", True)]
     if failed:
@@ -202,6 +231,18 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
                 f"cannot distinguish a surviving binding from a mutation that never "
                 f"happened")
 
+    if mutation.witness is not None:
+        witness_after = _read_witness(mutation, a, principal)
+        if witness_before is _WITNESS_ERROR or witness_after is _WITNESS_ERROR:
+            return inconclusive(f"the witness for '{mutation.id}' could not be read; the "
+                                f"cell cannot show the mutation happened")
+        if witness_before == witness_after:
+            return inconclusive(
+                f"'{mutation.id}' left the witness unchanged ({witness_before!r}) — on this "
+                f"evidence the mutation did not happen, and a surviving binding cannot be "
+                f"told apart from a mutation that never ran")
+        verified = True
+
     # 5. re-present the captured binding on each readable plane
     per_plane = {p: (Survival.SURVIVED if a.present_binding(handle, p).ok else Survival.REVOKED)
                  for p in readable}
@@ -212,7 +253,8 @@ def run_cell(adapter_factory: AdapterFactory, mint: MintSpec, mutation: Mutation
         return ", ".join(str(p) for p in ps)
 
     def tag(v: CellVerdict) -> CellVerdict:
-        v.mutation_verified = ("verified" if verified is True else
+        v.mutation_verified = ("witnessed" if mutation.witness is not None and verified is True
+                               else "verified" if verified is True else
                                "unverified — steps succeeded but the mutation's effect "
                                "was not independently confirmed")
         return v
