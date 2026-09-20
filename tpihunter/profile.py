@@ -263,6 +263,11 @@ class SessionSpec:
     kind: str = "cookie"          # "cookie" (a jar per principal) | "header" (bearer token)
     header: str = "Authorization"
     format: str = "Bearer {token}"
+    # True when this tool must NOT authenticate here and sessions are handed to it instead.
+    # Set it for any target whose login is gated by a CAPTCHA, a device check or a push
+    # approval: defeating those is a hard stop on every programme worth testing, so the
+    # honest description of such a target is "I cannot log in", declared up front.
+    supplied: bool = False
 
     @staticmethod
     def parse(raw: Any, problems: list) -> "SessionSpec":
@@ -281,7 +286,7 @@ class SessionSpec:
             header = "Authorization"
         fmt = str(raw.get("format", "Bearer {token}"))
         _check_placeholders(fmt, "session.format", problems)
-        return SessionSpec(kind, header, fmt)
+        return SessionSpec(kind, header, fmt, bool(raw.get("supplied", False)))
 
 
 @dataclass(frozen=True)
@@ -354,9 +359,19 @@ class TargetProfile:
             r = Request.parse(spec, f"actions.{aname}", problems)
             if r is not None:
                 actions[str(aname)] = r
-        if "register" not in actions and "login" not in actions:
+        if session.supplied:
+            offenders = sorted({"register", "login"} & set(actions))
+            if offenders:
+                problems.append(
+                    f"actions.{'/'.join(offenders)}: must not be declared when "
+                    f"session.supplied is true — that setting means this tool does not "
+                    f"authenticate here, so it must not be able to try")
+        elif "register" not in actions and "login" not in actions:
             problems.append("actions: needs at least 'register' or 'login' — a principal "
-                            "has to be able to establish a session")
+                            "has to be able to establish a session. If the target's login "
+                            "is gated by a CAPTCHA or a device check, set "
+                            '"session": {"supplied": true} and pass sessions captured '
+                            "out of band instead")
 
         oracle = {}
         for oname, spec in (raw.get("oracle") or {}).items():
@@ -438,7 +453,7 @@ class TargetProfile:
         return {
             "name": self.name, "base_url": self.base_url, "host": self.host,
             "accounts": {r: a.email for r, a in self.accounts.items()},
-            "session": self.session.kind,
+            "session": self.session.kind + (" (supplied)" if self.session.supplied else ""),
             "actions": sorted(self.actions),
             "oracle": sorted(self.oracle),
             "channel": self.channel is not None,

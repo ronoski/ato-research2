@@ -17,6 +17,11 @@ description it follows was written by a model reading the target's own responses
     requests, and a hard request budget. `policy.guard()` layers the action-level gates
     (credential changes, cross-principal writes) on top; `live_adapter()` builds both
     together over one shared audit log, which is how you should normally construct one.
+  * **The tool does not authenticate.** Consumer auth is gated by CAPTCHA, device checks
+    or push approvals, and defeating any of those is a hard stop on every programme worth
+    testing — so `sessions={"victim": "<credential>"}` takes sessions a human captured in
+    a real browser and drives everything after that. `login`/`register` for such a
+    principal are satisfied without a request, and the trace says so.
   * **Channel control is the hunter's, not the target's.** Whether a principal can
     complete an IdP or inbox flow is a fact about the world, so it is enforced here,
     exactly as `MockAdapter` does it. A probe that would need the attacker to read the
@@ -170,7 +175,8 @@ class LiveAdapter:
     """The alphabet, driven over HTTP from a `TargetProfile`."""
 
     def __init__(self, profile: TargetProfile, policy: EngagementPolicy,
-                 control: Optional[dict] = None, audit: Optional[AuditLog] = None) -> None:
+                 control: Optional[dict] = None, audit: Optional[AuditLog] = None,
+                 sessions: Optional[dict] = None) -> None:
         problems = policy.preflight()
         if problems:
             raise ScopeViolation("engagement policy is not ready:\n  - " + "\n  - ".join(problems))
@@ -197,6 +203,12 @@ class LiveAdapter:
         self.control: dict = {k: set(v) for k, v in (control or {}).items()}
         self._transports: dict = {}
         self._tokens: dict = {}      # principal -> bearer token, when session.kind == "header"
+        # Sessions captured OUTSIDE this tool and handed to it: {principal name -> token}.
+        # Real consumer auth is gated by a CAPTCHA, a device check or a push approval, and
+        # defeating any of those is out of scope on every programme worth testing. So the
+        # framework does not log in — a human does, and passes the resulting credential
+        # here. Everything after authentication is still driven normally.
+        self._supplied: dict = dict(sessions or {})
 
     # -- per-principal transport ---------------------------------------------
     def _t(self, p: Principal) -> ScopedTransport:
@@ -223,9 +235,14 @@ class LiveAdapter:
         elif spec.form is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
             body = urllib.parse.urlencode(render(spec.form, vars)).encode()
-        if self.profile.session.kind == "header" and self._tokens.get(p.name):
-            headers[self.profile.session.header] = render(
-                self.profile.session.format, {"token": self._tokens[p.name]})
+        token = self._supplied.get(p.name) or self._tokens.get(p.name)
+        if token:
+            if self.profile.session.kind == "header":
+                headers[self.profile.session.header] = render(
+                    self.profile.session.format, {"token": token})
+            elif p.name in self._supplied:
+                # a cookie jar cannot be handed over, so a supplied cookie is sent verbatim
+                headers["Cookie"] = token
         resp = self._t(p).send(spec.method, url, headers, body)
         got = {name: ex.apply(resp) for name, ex in spec.extract.items()}
         if spec.session_from is not None:
@@ -251,7 +268,17 @@ class LiveAdapter:
                            proof=proof, note=note)
 
     # -- alphabet -------------------------------------------------------------
+    def has_supplied_session(self, p: Principal) -> bool:
+        return p.name in self._supplied
+
     def _run_action(self, p: Principal, action: str, **params) -> Observation:
+        if action in ("login", "register") and p.name in self._supplied:
+            # The principal is already authenticated by a credential captured out of band.
+            # Re-authenticating would mean driving the very flow we are not permitted to
+            # automate, so the step is satisfied without a request — and says so, because
+            # a probe whose `register` did not actually register means something different.
+            return Observation(True, note=f"{p} is using a supplied session; '{action}' "
+                                          f"not performed by this tool")
         spec = self.profile.actions.get(action)
         if spec is None:
             return Observation(False, note=f"action '{action}' has no binding on this target")
@@ -366,9 +393,11 @@ class LiveAdapter:
 
 
 def live_adapter(profile: TargetProfile, policy: EngagementPolicy,
-                 control: Optional[dict] = None, audit: Optional[AuditLog] = None):
+                 control: Optional[dict] = None, audit: Optional[AuditLog] = None,
+                 sessions: Optional[dict] = None):
     """Build a policy-enforced live adapter: transport-level scope, TLS, timeout, size,
     rate and budget limits, plus `policy.guard()`'s action-level gates and audit trail,
     over one shared log. This is how a live adapter should be constructed."""
     log = audit if audit is not None else AuditLog()
-    return guard(LiveAdapter(profile, policy, control=control, audit=log), policy, log)
+    return guard(LiveAdapter(profile, policy, control=control, audit=log,
+                             sessions=sessions), policy, log)

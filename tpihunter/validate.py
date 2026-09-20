@@ -134,14 +134,20 @@ def _check_natural_canary(inner, profile, v) -> tuple:
 
 
 def validate_target(profile: TargetProfile, policy: EngagementPolicy,
-                    audit: Optional[AuditLog] = None) -> Validation:
-    """Run the profile against the target and report what works."""
+                    audit: Optional[AuditLog] = None,
+                    sessions: Optional[dict] = None) -> Validation:
+    """Run the profile against the target and report what works.
+
+    `sessions` are credentials captured outside this tool (a human's browser login), keyed
+    by principal name. Where one is supplied the session check verifies it resolves to an
+    identity rather than trying to log in — which on a CAPTCHA-gated target is the only
+    lawful way to get a session at all."""
     v = Validation()
     log = audit if audit is not None else AuditLog()
 
     try:
         adapter = live_adapter(profile, policy, control={VICTIM.name: profile.identifiers()},
-                               audit=log)
+                               audit=log, sessions=sessions)
     except PolicyViolation as e:
         v.checks.append(Check("engagement", "fail", untrusted(str(e), 300),
                               "Name every identifier and host the profile uses in the "
@@ -163,8 +169,28 @@ def validate_target(profile: TargetProfile, policy: EngagementPolicy,
 
     # 2/3. each principal can establish its own session, on its own account
     ids = {}
+    if profile.session.supplied and not sessions:
+        v.checks.append(Check("sessions", "fail",
+                              "this profile declares that the tool does not authenticate "
+                              "here, and no sessions were supplied",
+                              "Log in as each principal in a real browser and pass the "
+                              "resulting credentials as `sessions={'victim': ..., "
+                              "'attacker': ...}`. Nothing here may automate that login."))
+        return v
     for p in (VICTIM, ATTACKER):
         acct = profile.accounts.get(p.name)
+        if inner.has_supplied_session(p):
+            who = inner.whoami(p)
+            if not who.ok or not who.identity:
+                v.checks.append(Check(f"session:{p.name}", "fail",
+                                      "the supplied credential does not resolve to an identity",
+                                      "Recapture it: it has probably expired, or it is "
+                                      "carried differently than `session` describes."))
+                continue
+            ids[p.name] = who.identity
+            v.checks.append(Check(f"session:{p.name}", "pass",
+                                  f"supplied session -> identity {untrusted(who.identity, 60)}"))
+            continue
         obs = inner.login(p, acct.email, acct.password)
         how = "login"
         if not obs.ok:

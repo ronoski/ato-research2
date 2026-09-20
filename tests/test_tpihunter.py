@@ -1911,5 +1911,79 @@ class TestHackerOneScopeImport(unittest.TestCase):
             self.assertIn("forbids account registration", str(cm.exception))
 
 
+class TestSuppliedSessions(unittest.TestCase):
+    """The tool must not authenticate. Real consumer auth is gated by CAPTCHA, a device
+    check or a push approval — defeating any of those is a hard stop on every programme
+    worth testing — so a human logs in and hands the credential over, and the framework
+    drives everything after that. Confirmed necessary on a real target: the login form of
+    the in-scope Nintendo account host is gated by reCAPTCHA Enterprise."""
+
+    def _login_out_of_band(self, url, email, password):
+        """Stand in for the human: log in however a person would, keep the credential."""
+        import json as _j, urllib.request
+        req = urllib.request.Request(
+            url + "/api/signup", _j.dumps({"email": email, "password": password}).encode(),
+            {"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req) as r:
+            return r.headers.get("Set-Cookie", "").split(";")[0]      # "sid=..."
+
+    def test_a_supplied_cookie_authenticates_without_this_tool_logging_in(self):
+        from tpihunter.http_mock import (ATTACKER_EMAIL, VICTIM_EMAIL, engagement_for,
+                                         profile_for, serve)
+        from tpihunter.live import LiveAdapter
+        from tpihunter.policy import EngagementPolicy
+        from tpihunter.profile import TargetProfile
+        attacker, victim = _principals()
+        with serve(patched=False) as url:
+            sessions = {victim.name: self._login_out_of_band(url, VICTIM_EMAIL, "Vv!1234567"),
+                        attacker.name: self._login_out_of_band(url, ATTACKER_EMAIL, "Aa!1234567")}
+            prof = TargetProfile.from_dict(profile_for(url))
+            policy = EngagementPolicy.from_dict(engagement_for(url))
+            a = LiveAdapter(prof, policy, sessions=sessions)
+            self.assertTrue(a.has_supplied_session(victim))
+            vi, ai = a.whoami(victim), a.whoami(attacker)
+            self.assertTrue(vi.ok and ai.ok)
+            self.assertNotEqual(vi.identity, ai.identity)     # two independent contexts
+            # login/register are satisfied without touching the flow we may not automate
+            obs = a.login(victim, VICTIM_EMAIL, "whatever")
+            self.assertTrue(obs.ok)
+            self.assertIn("not performed by this tool", obs.note)
+
+    def test_validation_checks_a_supplied_session_instead_of_logging_in(self):
+        from tpihunter.http_mock import (ATTACKER_EMAIL, VICTIM_EMAIL, engagement_for,
+                                         readonly_profile_for, serve)
+        from tpihunter.policy import EngagementPolicy
+        from tpihunter.profile import TargetProfile
+        from tpihunter.validate import validate_target
+        attacker, victim = _principals()
+        with serve() as url:
+            sessions = {victim.name: self._login_out_of_band(url, VICTIM_EMAIL, "Vv!1234567"),
+                        attacker.name: self._login_out_of_band(url, ATTACKER_EMAIL, "Aa!1234567")}
+            v = validate_target(TargetProfile.from_dict(readonly_profile_for(url)),
+                                EngagementPolicy.from_dict(engagement_for(url)),
+                                sessions=sessions)
+        by = {c.name: c for c in v.checks}
+        self.assertEqual(by["session:victim"].status, "pass")
+        self.assertIn("supplied session", by["session:victim"].detail)
+        self.assertEqual(by["independence"].status, "pass")
+        # nothing was created by validation: the accounts already existed
+        self.assertFalse([a for a in v.artifacts if "created by validation" in a])
+
+    def test_an_expired_supplied_session_fails_loudly(self):
+        from tpihunter.http_mock import engagement_for, readonly_profile_for, serve
+        from tpihunter.policy import EngagementPolicy
+        from tpihunter.profile import TargetProfile
+        from tpihunter.validate import validate_target
+        _attacker, victim = _principals()
+        with serve() as url:
+            v = validate_target(TargetProfile.from_dict(readonly_profile_for(url)),
+                                EngagementPolicy.from_dict(engagement_for(url)),
+                                sessions={victim.name: "sid=expired-and-invalid"})
+        by = {c.name: c for c in v.checks}
+        self.assertEqual(by["session:victim"].status, "fail")
+        self.assertIn("does not resolve to an identity", by["session:victim"].detail)
+        self.assertFalse(v.ready)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

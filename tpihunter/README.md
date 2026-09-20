@@ -247,6 +247,29 @@ starts the vulnerable mock on a loopback HTTP port, describes it with a `TargetP
 validates the description, and then runs the ordinary hunt against it — finding the same
 TPI-1 and TPI-4, with the same minimal repros, through sockets and cookies and JSON.
 
+### When the tool may not log in
+
+Real consumer auth is gated — a CAPTCHA, a device check, a push approval — and defeating
+any of those is a hard stop on every programme worth testing. Verified on a live in-scope
+target: the Nintendo account login form is a reCAPTCHA Enterprise component
+(`canSubmit` requires `isRecaptchaEnterpriseReady`; submit calls
+`grecaptchaEnterpriseChallenge()`), behind Akamai bot manager.
+
+So the framework does not authenticate. A human logs in in a real browser and hands the
+credential over:
+
+```python
+adapter = live_adapter(profile, policy, sessions={"victim": tok_v, "attacker": tok_a})
+```
+
+Declared in the profile with `"session": {"supplied": true}`, which then **refuses a
+profile that declares `login` or `register`** — the setting means this tool does not
+authenticate here, so it must not be able to try. `validate_target()` verifies a supplied
+credential resolves to an identity instead of logging in, and blocks with a named fix if
+none was supplied. `login`/`register` steps for such a principal are satisfied without a
+request, and the trace says so, because a probe whose `register` did not actually register
+means something different.
+
 ### Getting the scope right
 
 Transcribing a programme's scope by hand is where an engagement acquires a host it was
