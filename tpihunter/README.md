@@ -290,6 +290,39 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## A consent token that is actually pinned (live TPI-2)
+
+The best-defended flow measured on this target, and worth recording because the class it
+belongs to usually breaks.
+
+A family admin cannot unilaterally place an adult member under parental control. The
+request mails the member an acceptance URL with a 24-hour expiry, which moves the entire
+consent gate onto one capability token. Most implementations stop there and treat
+possession of that token as consent. This one does not:
+
+```
+who opens the link                          outcome
+the member it privileges                    accept form: "Agree to Being Supervised"
+the ADMIN who requested it                  refused: "you must sign in as <member>"
+no session at all                           302 -> /login
+```
+
+That middle row is TPI-2 exactly: the surface resolved the token, determined which
+principal it privileges, compared it to the principal presenting it, and refused — naming
+the account required rather than acting. A proof pinned to a resource, checked against the
+actor.
+
+The test needed a real cross-principal **write** to reach (the request had to be sent
+before there was a token to examine), and the ordering mattered: the attacker case ran
+first, because legitimate acceptance may consume the token. The positive control — the
+member seeing the accept form on that same token — is what proves the admin's refusal was
+the binding check rather than an expired link.
+
+One honest limit on severity, worth stating in any report of this shape: the test rig held
+both mailboxes, which a real admin does not. Even an unbound token would still require the
+attacker to obtain the emailed link. "Admin unilaterally supervises a member" would have
+been an overstatement of what the email step allows.
+
 ## Why the witness must not be the page (a live TPI-1 pre-claim)
 
 Pre-account-hijacking is this project's founding shape: an attacker binds an identifier
