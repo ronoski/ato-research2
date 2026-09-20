@@ -2854,5 +2854,94 @@ class TestSessionLifecycle(unittest.TestCase):
         self.assertIn("total spent: 1", out)
 
 
+class TestStepUpMatrix(unittest.TestCase):
+    """TPI-6 as a mode. The clause is about two equally-privileged flows disagreeing,
+    so most of these tests are about NOT reporting the many ways they legitimately differ."""
+
+    def _t(self):
+        from tpihunter.stepup_matrix import nintendo_account_transitions
+        return nintendo_account_transitions()
+
+    def _probe(self, levels, seen=True):
+        from tpihunter.stepup_matrix import Level, Reading
+        def probe(t):
+            if t.id not in levels:
+                return Reading(Level.INCONCLUSIVE, "not read")
+            lv = levels[t.id]
+            return Reading(lv, f"observed {lv.value}", principal_seen=seen)
+        return probe
+
+    def test_equal_privilege_disagreement_is_a_tpi6_finding(self):
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}), session_age=7200)
+        self.assertEqual(len(r.findings), 1)
+        f = r.findings[0]
+        self.assertEqual(f.clause_id, "TPI-6")
+        self.assertEqual(f.privilege, "login-credential")
+        self.assertIn("passkey", f.accepted)
+        self.assertIn("login_id/edit", f.demanded)
+
+    def test_different_privilege_classes_are_not_compared(self):
+        """Editing a nickname needs less proof than changing a password. That is not a
+        bug, and a mode that reports it is a mode nobody will run twice."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "password/edit": Level.DEMANDED, "profile/edit": Level.NOT_DEMANDED}), session_age=7200)
+        self.assertEqual(r.findings, [])
+
+    def test_a_logged_out_page_never_reads_as_no_step_up(self):
+        """The control that makes the mode sound. A logged-out page shows no password
+        prompt either, so without a positive marker it would score as the single most
+        exploitable cell on the board."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe(
+            {"login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}, seen=False),
+            session_age=7200)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("logged out" in w for w in r.withheld))
+        cell = [c for c in r.cells if c.transition.id == "passkey"][0]
+        self.assertIs(cell.level, Level.INCONCLUSIVE)
+
+    def test_a_demanded_reading_needs_no_liveness_marker(self):
+        """A 302 to /reauthenticate is self-evidencing: a logged-out surface does not ask
+        this principal to re-authenticate, it asks it to log in."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({"login_id/edit": Level.DEMANDED}, seen=False),
+                       session_age=7200)
+        cell = [c for c in r.cells if c.transition.id == "login_id/edit"][0]
+        self.assertIs(cell.level, Level.DEMANDED)
+
+    def test_a_fresh_session_withholds_the_verdict(self):
+        """Most surfaces run a freshness window, so an asymmetry measured a minute after
+        login is about being freshly logged in, not about provenance."""
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "login_id/edit": Level.DEMANDED, "passkey": Level.NOT_DEMANDED}), session_age=60)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(any("freshness window" in w for w in r.withheld))
+
+    def test_an_inconclusive_cell_is_not_an_acceptance(self):
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({"login_id/edit": Level.DEMANDED}), session_age=7200)
+        self.assertEqual(r.findings, [])
+
+    def test_uniform_refusal_is_not_a_finding(self):
+        from tpihunter.stepup_matrix import Level, run_stepup
+        r = run_stepup(self._t(), self._probe({
+            "login_id/edit": Level.DEMANDED, "passkey": Level.DEMANDED,
+            "password/edit": Level.DEMANDED}), session_age=7200)
+        self.assertEqual(r.findings, [])
+        self.assertIn("agree", r.render())
+
+    def test_a_probe_that_raises_is_inconclusive_not_evidence(self):
+        from tpihunter.stepup_matrix import Level, run_stepup
+        def probe(t):
+            raise RuntimeError("connection reset")
+        r = run_stepup(self._t(), probe, session_age=7200)
+        self.assertEqual(r.findings, [])
+        self.assertTrue(all(c.level is Level.INCONCLUSIVE for c in r.cells))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -178,6 +178,47 @@ developer portal returned a **byte-identical 11,998-byte page** for `/`, `/welco
 `/j_spring_security_logout` *and* a nonsense path — three "reachable without auth" results,
 all artefacts.
 
+## The step-up matrix (the sixth mode)
+
+> Sibling to `stepup.py` (M17), which models TPI-6 *inside the state machine* — partial
+> sessions, a multi-phase login, a recovery flow accepting what login refuses. That needs a
+> modelled target; this needs only a session and a list of URLs.
+
+`matrix.py` asks, over time, whether a mutation revokes what predates it. This asks the
+sibling question across flows, at one instant: **what provenance does the surface demand
+before it will perform this transition?**
+
+TPI-6 is not "this action needs no step-up" — that is a policy choice. It is *two
+transitions of equal privilege disagreeing*. A surface that re-authenticates before a
+login-id change and not before enrolling a passkey has not decided anything; it has left
+a flow behind, and whoever holds a session cookie takes the one that does not ask.
+
+Measured live on one aged session:
+
+```
+transition         privilege          step-up        evidence
+login_id/edit      login-credential   demanded       302 /reauthenticate
+login_method       login-credential   demanded       302 /reauthenticate
+passkey            login-credential   not-demanded   rendered form
+2fa/authenticator  login-credential   not-demanded   rendered form
+profile/edit       profile-data       not-demanded   rendered form
+```
+
+Four controls, because the naive version of this mode is a false-positive generator:
+
+* **Liveness (positive).** A logged-out page shows no password prompt either — so without
+  a marker that only an authenticated view of *this* principal renders, "no step-up" is
+  indistinguishable from "logged out", and would score as the most exploitable cell on the
+  board. Absence of a step-up is not evidence; presence of the principal is. A `DEMANDED`
+  reading needs no such marker: a logged-out surface does not ask you to *re*-authenticate.
+* **Age.** Below `min_age` (default 15 min) the verdict is withheld — most surfaces run a
+  freshness window, and an asymmetry measured a minute after login is about being freshly
+  logged in.
+* **Equal privilege.** Transitions are compared only inside a declared class. Without it
+  the mode "discovers" that editing a nickname needs less proof than changing a password.
+* **Conclusiveness.** A finding needs a refusal *and* an acceptance, both conclusive. A
+  timeout or a raised probe never becomes evidence of an absence.
+
 ## Credential structure (the fifth mode)
 
 TPI reasons about a binding: who holds it, what proof justifies it, what revokes it. The
@@ -339,6 +380,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `probe.py` | bounded, hypothesis-led enumeration; a candidate without a stated hypothesis cannot be constructed |
 | `browser.py` | **a UI flow as an ordinary adapter** — `BrowserAdapter`, `Flow`, `UiStep`, `Expect`. The browser is injected as a `PageDriver`, so the logic is tested without one |
 | `sessions.py` | **sessions as scarce inventory** — `SessionStore` reuses a live session before minting one, `LoginLedger` caps the spend and refuses after repeated failures |
+| `stepup_matrix.py` | **the step-up matrix (TPI-6, live)** — which privileged transitions demand re-authentication, and which equally-privileged sibling does not. Sibling to `stepup.py`, which models the same clause in the state machine |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
