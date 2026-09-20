@@ -2295,5 +2295,113 @@ class TestBrowserAdapter(unittest.TestCase):
         self.assertIn("does not control", a.sso_login(Principal("attacker")).note)
 
 
+class TestIdentifierEquivalence(unittest.TestCase):
+    """The takeover class the state machine cannot represent. TPI treats an identifier as
+    an atom, so a system whose CLAIM layer and RESOLVE layer disagree about whether two
+    strings are the same identity is invisible to it — no binding survives anything and
+    justifies(prov(B), B) holds at every step, yet registering a variant takes the account."""
+
+    BASE, ACCT = "v@x.example", "acct_1"
+
+    def test_one_representative_per_class_never_a_product(self):
+        from tpihunter.identifiers import MAX_VARIANTS, variants
+        vs = variants(self.BASE)
+        kinds = [v.kind for v in vs]
+        self.assertEqual(len(kinds), len(set(kinds)))        # no class twice
+        self.assertLessEqual(len(vs), MAX_VARIANTS)
+        self.assertTrue(all(v.rationale for v in vs))        # every value has a reason
+        self.assertNotIn(self.BASE, [v.value for v in vs])   # the base is not a variant
+
+    def test_a_claimable_variant_that_authenticates_is_a_takeover_primitive(self):
+        from tpihunter.identifiers import probe_identifier
+        # the classic shape: the claim layer is case-sensitive, the resolve layer is not
+        def claimable(x): return x != self.BASE
+        def resolves(x): return self.ACCT if x.lower().strip() == self.BASE else None
+        rep = probe_identifier(self.BASE, self.ACCT, claimable, resolves)
+        self.assertTrue(rep.sound)
+        kinds = {f.kind for f in rep.findings}
+        self.assertIn("takeover_primitive", kinds)
+        hit = next(f for f in rep.findings if f.kind == "takeover_primitive")
+        self.assertIn("takeover of that account", hit.render())
+
+    def test_a_consistent_system_yields_nothing(self):
+        from tpihunter.identifiers import probe_identifier
+        # both layers canonicalise identically -> no disagreement -> no finding
+        def canon(x): return x.lower().strip()
+        def claimable(x): return canon(x) != canon(self.BASE)
+        def resolves(x): return self.ACCT if canon(x) == canon(self.BASE) else None
+        rep = probe_identifier(self.BASE, self.ACCT, claimable, resolves)
+        self.assertTrue(rep.sound)
+        self.assertEqual(rep.findings, [])
+
+    def test_a_layer_that_resolves_everything_is_caught_by_the_control(self):
+        from tpihunter.identifiers import probe_identifier
+        rep = probe_identifier(self.BASE, self.ACCT,
+                               claimable=lambda x: True,
+                               resolves_to=lambda x: self.ACCT)      # resolves anything
+        self.assertFalse(rep.sound)
+        self.assertEqual(rep.findings, [])
+        self.assertIn("INCONCLUSIVE", rep.summary())
+
+    def test_a_resolve_that_misses_the_base_is_caught_by_the_control(self):
+        from tpihunter.identifiers import probe_identifier
+        rep = probe_identifier(self.BASE, self.ACCT,
+                               claimable=lambda x: True,
+                               resolves_to=lambda x: None)           # resolves nothing
+        self.assertFalse(rep.sound)
+        self.assertIn("INCONCLUSIVE", rep.summary())
+
+    def test_an_unanswerable_layer_is_skipped_not_guessed(self):
+        from tpihunter.identifiers import probe_identifier
+        rep = probe_identifier(self.BASE, self.ACCT,
+                               claimable=lambda x: None,             # cannot tell
+                               resolves_to=lambda x: self.ACCT
+                               if x.lower().strip() == self.BASE else None)
+        self.assertTrue(rep.sound)
+        self.assertEqual(rep.findings, [])
+        self.assertTrue(rep.skipped)
+
+
+class TestBoundedProbe(unittest.TestCase):
+    """Enumeration belongs in the loop; a wordlist does not. The difference is not the
+    number of requests, it is whether each value was chosen for a reason."""
+
+    def test_a_candidate_without_a_hypothesis_cannot_exist(self):
+        from tpihunter.probe import Candidate
+        for bad in ("", "   ", None):
+            with self.assertRaises((ValueError, TypeError)):
+                Candidate("arg", "value", bad)
+
+    def test_the_bound_refuses_rather_than_trims(self):
+        from tpihunter.probe import Budget, Candidate, run_probe
+        cands = [Candidate("a", str(i), "shape guess") for i in range(5)]
+        res = run_probe(Budget(per_argument=2, total=99), cands, lambda c: (200, "ok", False))
+        self.assertEqual(len(res.outcomes), 2)
+        self.assertIn("widen the hypothesis", res.exhausted)
+        self.assertFalse(res.complete)          # stopping early is not a clean negative
+
+    def test_a_rate_limit_halts_the_probe_and_says_so(self):
+        from tpihunter.probe import Budget, Candidate, run_probe
+        cands = [Candidate("a", str(i), "h") for i in range(4)]
+        res = run_probe(Budget(), cands, lambda c: (429, "slow down", False))
+        self.assertIn("429", res.halted)
+        self.assertFalse(res.complete)
+        self.assertIn("not a clean negative", res.summary())
+
+    def test_a_challenge_halts_rather_than_being_worked_around(self):
+        from tpihunter.probe import Budget, Candidate, run_probe
+        res = run_probe(Budget(), [Candidate("a", "1", "h")],
+                        lambda c: (200, "please complete the captcha", False))
+        self.assertIn("challenge", res.halted)
+        self.assertFalse(res.complete)
+
+    def test_a_clean_run_reports_complete(self):
+        from tpihunter.probe import Budget, Candidate, run_probe
+        res = run_probe(Budget(), [Candidate("a", "1", "h"), Candidate("a", "2", "h")],
+                        lambda c: (200, "ok", c.value == "2"))
+        self.assertTrue(res.complete)
+        self.assertEqual(len(res.interesting()), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

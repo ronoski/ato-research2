@@ -12,6 +12,8 @@ The pieces:
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
   browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
+  identifiers  identifier-equivalence probing — the takeover class TPI cannot represent
+  probe        bounded, hypothesis-led enumeration (the legitimate half of "try things")
   profile      TargetProfile: a real target described as data, not code
   live         LiveAdapter: drives that profile over HTTP, scope enforced per request
   validate     validate_target(): prove the profile works before trusting a verdict
@@ -34,6 +36,9 @@ from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Surv
 from .browser import (BrowserAdapter, BrowserProfile, Expect, Flow, PageDriver, UiStep,
                       playwright_driver_factory)
 from .h1_scope import from_hackerone_csv, parse_instruction
+from .identifiers import Finding as IdentifierFinding
+from .identifiers import Variant, probe_identifier, variants
+from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
 from .live import LiveAdapter, ScopedTransport, live_adapter
 from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
                      PolicyViolation, ScopeViolation, for_mock, guard, policy_report)
@@ -66,6 +71,8 @@ __all__ = [
     "from_hackerone_csv", "parse_instruction",
     "BrowserAdapter", "BrowserProfile", "Flow", "UiStep", "Expect", "PageDriver",
     "playwright_driver_factory",
+    "probe_identifier", "variants", "Variant", "IdentifierFinding",
+    "Budget", "Candidate", "run_probe", "ProbeResult", "Halted",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",

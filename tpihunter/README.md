@@ -138,6 +138,38 @@ by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a valu
 never the canary, and the restore is verified — a failure is recorded in
 `Verdict.controls`, not left silently corrupting the target.
 
+## Outside the state machine (the third mode)
+
+TPI models an identifier as an **atom**. Every question it can ask is about transitions
+over time — who held which binding, and what revoked it. That makes a real family of
+takeovers structurally invisible, because they involve no transition at all:
+
+> the layer deciding an identifier is **free to claim** says two strings are different;
+> the layer deciding which account an identifier **authenticates to** says they are the same.
+
+An attacker registers the variant the first layer offers and lands on the account the
+second resolves it to. No binding survived anything, no proof was laundered,
+`justifies(prov(B), B)` holds at every step — and the account is gone. `identifiers.py`
+makes that question askable: one representative per canonicalization class (case, unicode
+NFKC, zero-width, fullwidth, dotless-i, sub-addressing, dot-folding, trailing dot,
+homoglyph domain, quoted local part, NUL and newline suffixes), each carrying the reason a
+system might fold it.
+
+Two controls, and the report is `INCONCLUSIVE` without them: the base identifier must
+resolve to the expected account (otherwise the resolve layer is not measuring what we
+think), and an unrelated one must not (otherwise it resolves everything and every variant
+looks like a collision). A layer that cannot answer is **skipped, never guessed**.
+
+## Enumeration, bounded
+
+A programme's rules usually say both *no scanners, no wordlists* and *structured input
+probing is fine, bounded and hypothesis-led, ≤N values per argument*. The difference is
+not the request count — it is whether each value was chosen for a reason. `probe.py` makes
+the reason mandatory and the bound structural: a `Candidate` **cannot be constructed
+without a hypothesis**, `Budget` refuses rather than trims, and a 429 or a challenge
+**halts** the run and marks the result as not a clean negative. A probe that stopped early
+is not a probe that found nothing.
+
 ## The revocation matrix (the second mode)
 
 The oracle hunts *confluence* — two principals, does the attacker read the victim's
@@ -208,6 +240,8 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
+| `identifiers.py` | **outside the state machine** — identifier-equivalence probing: two layers disagreeing about whether two strings are one identity |
+| `probe.py` | bounded, hypothesis-led enumeration; a candidate without a stated hypothesis cannot be constructed |
 | `browser.py` | **a UI flow as an ordinary adapter** — `BrowserAdapter`, `Flow`, `UiStep`, `Expect`. The browser is injected as a `PageDriver`, so the logic is tested without one |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
