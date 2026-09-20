@@ -2835,6 +2835,37 @@ class TestSessionLifecycle(unittest.TestCase):
         self.assertEqual(c["n"], 1)                     # re-minted, not trusted
         self.assertEqual(got.cookies["sid"], "S1")
 
+    def test_only_target_side_failures_count_toward_the_throttle_guard(self):
+        """Two failures locked out a third attempt that would have worked. One was a
+        refusal at the form (a real risk signal); the other was a verification code that
+        never arrived because our own mail forwarding was not switched on. The second says
+        nothing about throttling, and counting it is how the guard turns a working surface
+        into an unreachable one."""
+        from tpihunter.sessions import LoginLedger
+        led = LoginLedger(max_per_principal=9, max_total=99)
+        led.record("gm", False, "refused")
+        led.record("gm", False, "no_code")          # our plumbing, not their pushback
+        self.assertEqual(led.recent_failures("gm"), 1)
+        self.assertIsNone(led.may_login("gm"))      # a third attempt is still allowed
+        led.record("gm", False, "refused")
+        self.assertEqual(led.recent_failures("gm"), 2)
+        self.assertIn("retrying is what deepens it", led.may_login("gm") or "")
+
+    def test_a_bare_failure_still_counts_as_a_refusal(self):
+        from tpihunter.sessions import LoginLedger
+        led = LoginLedger(max_per_principal=9, max_total=99)
+        led.record("p", False); led.record("p", False)
+        self.assertEqual(led.recent_failures("p"), 2)
+
+    def test_a_login_may_report_its_failure_reason(self):
+        from tpihunter.sessions import NoSessionAvailable
+        st, _ = self._store(validate=lambda s: False)
+        with self.assertRaises(NoSessionAvailable):
+            st.acquire("p", login=lambda: (None, "no_code"))
+        with self.assertRaises(NoSessionAvailable):
+            st.acquire("p", login=lambda: (None, "no_code"))
+        self.assertEqual(st.ledger.recent_failures("p"), 0)   # neither was target-side
+
     def test_a_session_supplied_out_of_band_costs_nothing(self):
         from tpihunter.sessions import Session
         st, _ = self._store(validate=lambda s: True)

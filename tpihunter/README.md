@@ -290,6 +290,46 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## When one blocker wears four disguises (the step-up wall)
+
+Four separate "results" were recorded against this target over several hours:
+`/password/edit` times out, `/email/edit` times out, `/login_id/edit` times out,
+`/phone_number/register` times out. Each went into the notes as its own measurement, and
+one of them ("`/reauthenticate` itself hangs for this client") was even documented as a
+*measurement trap worth keeping*.
+
+They were one blocker. Every binding mutation on this surface redirects to
+`/reauthenticate`, and the probes were reaching it wrong:
+
+```
+/email/edit                                   302 -> /reauthenticate?post_reauthenticate_redirect_uri=...
+/reauthenticate            (bare)             400   0 param
+/reauthenticate?post_...   (as the 302 gives) 403   Akamai challenge (bazadebezolkohpepadr=)
+```
+
+It never hung. A bare request is a `400` because the parameter is missing; the correct
+URL is a `403` bot challenge. Both answer in about a second. "Timeout" was an artifact of
+requesting the path without its query string and of a browser that would not commit a
+navigation to a challenge page.
+
+Two lessons, and the second is the expensive one:
+
+* **A timeout is not a status.** Any probe that records `code 0` should re-request the URL
+  exactly as the redirect supplies it before concluding anything. `stepup_matrix` already
+  refuses to treat a timeout as a refusal; it should equally refuse to treat one as a
+  property of the endpoint.
+* **Repeated identical failures across different routes are one hypothesis, not several.**
+  Four timeouts on four routes that share a redirect target is evidence about the target,
+  not about the routes. Filing them separately made a single tractable blocker look like a
+  diffuse pattern of flakiness, and an entire clause — TPI-1 revoke-on-rebind, the one
+  this framework is named for — went unmeasured for hours as a result.
+
+The wall itself is real and stands: with valid `_abck` in a warmed browser context,
+`/reauthenticate` still returns `403` and renders "This page cannot be displayed." So the
+binding surface is not reachable by automation here, and binding tests need a
+human-driven session. That is a very different statement from "the endpoint hangs", and
+only one of them is true.
+
 ## A consent token that is actually pinned (live TPI-2)
 
 The best-defended flow measured on this target, and worth recording because the class it

@@ -48,6 +48,7 @@ server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`
 | **audience** | `audience` — TPI-2 across relying parties: a token taken where it was not minted for | ✅ done (M36) |
 | **scopes** | `scopes` — TPI-6 at the token layer: consent as a provenance level, judged on a field witness | ✅ done (M37) |
 | **authority** | `authority` — the target's own `can*` flags as the oracle: declared vs enforced | ✅ done (M40) |
+| **sessions v2** | `sessions` — failure *reasons*: only target-side refusals count toward the throttle guard | ✅ done (M43) |
 | **synthesis** | richer params — synthesized actions take codes/tokens/second identifiers | ✅ done (M14) |
 
 ---

@@ -56,8 +56,18 @@ class LoginLedger:
     max_per_principal: int = 4
     max_total: int = 12
 
-    def record(self, principal: str, ok: bool) -> None:
-        self.attempts.setdefault(principal, []).append((time.time(), bool(ok)))
+    def record(self, principal: str, ok: bool, reason: str = "refused") -> None:
+        """`reason` distinguishes WHY a login failed, because only some reasons are
+        evidence of throttling.
+
+        A surface that refuses the form is telling you something about your risk score.
+        A verification code that never arrived because your own mail plumbing was not
+        wired up is telling you about *you*. Counting the second toward a
+        throttle-protection cap locks you out of a surface that was never throttling —
+        which is exactly what happened here: two failures, one a refusal and one a
+        missing code, and the store then refused a third attempt that would have worked.
+        """
+        self.attempts.setdefault(principal, []).append((time.time(), bool(ok), reason))
 
     def spent(self, principal: str) -> int:
         return len(self.attempts.get(principal, ()))
@@ -65,9 +75,19 @@ class LoginLedger:
     def total(self) -> int:
         return sum(len(v) for v in self.attempts.values())
 
+    # Failure reasons that indicate the TARGET is pushing back. Anything else is our own
+    # plumbing and must not count toward the throttle guard.
+    THROTTLE_SIGNALS = ("refused", "rejected", "challenge_failed", "rate_limited")
+
     def recent_failures(self, principal: str, n: int = 3) -> int:
         rows = self.attempts.get(principal, [])[-n:]
-        return sum(1 for _ts, ok in rows if not ok)
+        out = 0
+        for row in rows:
+            ok = row[1]
+            reason = row[2] if len(row) > 2 else "refused"
+            if not ok and reason in self.THROTTLE_SIGNALS:
+                out += 1
+        return out
 
     def may_login(self, principal: str) -> Optional[str]:
         """None if a login is permitted, else why not."""
@@ -145,7 +165,12 @@ class SessionStore:
             raise NoSessionAvailable(f"no live session for {principal} and no way to mint one")
 
         s = login()
-        self.ledger.record(principal, s is not None)
+        # A login callable may report why it failed by returning (None, reason); a bare
+        # None keeps the old meaning, a refusal.
+        reason = "refused"
+        if isinstance(s, tuple):
+            s, reason = s
+        self.ledger.record(principal, s is not None, reason)
         self.save()
         if s is None:
             raise NoSessionAvailable(
@@ -167,7 +192,15 @@ class SessionStore:
     def status(self) -> str:
         rows = [f"  {n:<10} age {int(s.age())}s  source={s.source}"
                 for n, s in sorted(self._sessions.items())]
-        led = [f"  {p:<10} {len(v)} login(s), {sum(1 for _t, ok in v if not ok)} failed"
+        def _failed(rows):
+            # rows persisted before reasons existed are 2-tuples; tolerate both shapes
+            return sum(1 for r in rows if not r[1])
+        def _throttling(rows):
+            return sum(1 for r in rows
+                       if not r[1] and (r[2] if len(r) > 2 else "refused")
+                       in LoginLedger.THROTTLE_SIGNALS)
+        led = [f"  {p:<10} {len(v)} login(s), {_failed(v)} failed "
+               f"({_throttling(v)} target-side)"
                for p, v in sorted(self.ledger.attempts.items())]
         return ("held sessions:\n" + ("\n".join(rows) or "  none") +
                 "\nlogin ledger:\n" + ("\n".join(led) or "  none") +
