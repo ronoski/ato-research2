@@ -111,6 +111,27 @@ the theory is meant, `CATALOG` to resolve whatever id a verdict carries. Without
 adapter that implements `enrol_bystander` the oracle still detects the takeover; it just
 records `controls["bystander"] = "unavailable"` and cannot discriminate.
 
+**The canary can be observed instead of planted.** The planted canary needs a writable
+private field, and most rules of engagement authorise reads and not writes — so
+`AtoOracle(..., canary="natural")` uses a private value the account **already holds** (an
+account id, a wallet handle) as ground truth, and never writes anything. That value is
+weaker evidence by construction, so the three properties a planted secret gets for free
+are measured rather than assumed, and each failure is `INCONCLUSIVE` with its own reason:
+
+| control | fails when | `withheld` |
+|---|---|---|
+| stable | it changed between two reads by its owner — a nonce or a timestamp | `canary_unstable` |
+| informative | under ~32 bits — a flag, a count, a currency code | `canary_low_entropy` |
+| distinct | the **bystander**'s copy of the same field holds the same value — a constant, not state | `canary_not_distinct` |
+| not attacker-supplied | the attacker itself submitted the value, so a "read" may be reflection | `canary_attacker_known` |
+
+A profile declares it with `"canary": "natural"`, and is then **refused if it declares any
+write route** — the mode exists because writes are not authorised, so it must not be able
+to issue one. `validate_target()` measures the same controls before the hunt, and the
+audit trail is the evidence: a regression test asserts no `PUT`/`PATCH`/`DELETE` is ever
+issued in this mode. On the loopback HTTP target it finds the same TPI-1 and TPI-4 as the
+planted mode.
+
 **Mutation is opt-in.** Proving the attacker can *write* the victim's resource is the
 strongest evidence there is and the only destructive thing the oracle does, so it is off
 by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a value that is

@@ -355,7 +355,8 @@ class AgentHunter:
 
     def __init__(self, adapter_factory: AdapterFactory, attacker: Principal,
                  victim: Principal, email: str, specs: Optional[dict[str, ActionSpec]] = None,
-                 budget: int = 200, confirm: int = 0, mutate: bool = False) -> None:
+                 budget: int = 200, confirm: int = 0, mutate: bool = False,
+                 canary: str = "planted") -> None:
         self.adapter_factory = adapter_factory
         self.attacker = attacker
         self.victim = victim
@@ -368,13 +369,16 @@ class AgentHunter:
         self.confirm = confirm
         # let the oracle attempt the destructive cross-principal write probe; off by default
         self.mutate = bool(mutate)
+        # "planted" or "natural" ground truth — see oracle._observe_natural_canary
+        self.canary = canary
 
     def _run(self, plan):
         a = self.adapter_factory()
         effects = {n: s.effect.value for n, s in self.specs.items()}
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
                                            effects=effects, confirm=self.confirm,
-                                           resource=self.email, mutate=self.mutate))
+                                           resource=self.email, mutate=self.mutate,
+                                           canary=self.canary))
 
     def _verdict(self, plan):
         return self._run(plan)[0]

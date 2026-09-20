@@ -95,7 +95,7 @@ class HuntSession:
 
     def __init__(self, target: str = "mock-vulnerable",
                  email: str = "victim@corp.example", confirm: int = 0,
-                 mutate: bool = False) -> None:
+                 mutate: bool = False, canary: str = "planted") -> None:
         self.attacker = Principal("attacker")
         self.victim = Principal("victim")
         self.email = email
@@ -111,6 +111,9 @@ class HuntSession:
         # victim's canary already proves takeover, and writing another principal's private
         # resource is the one irreversible thing the loop can do to a live target.
         self.mutate = bool(mutate)
+        # ground truth: a planted secret, or a private value the account already holds.
+        # A live profile overrides this from its own `canary` field.
+        self.canary = canary
         # live-target state: the operator's authorization, the agent's description of the
         # target, and whether that description has been shown to work.
         self.policy, self._no_engagement = _load_engagement()
@@ -180,6 +183,7 @@ class HuntSession:
         if host_problem:
             return {"ok": False, "error": host_problem, "authorized": sorted(self.policy.hosts)}
         self.profile = prof
+        self.canary = prof.canary          # the profile decides the evidence standard
         self.validation = None
         victim = prof.accounts.get("victim")
         if victim is not None:
@@ -335,7 +339,8 @@ class HuntSession:
         verdict, trace = run_plan(adapter, cand.plan,
                                   AtoOracle(adapter, self.attacker, self.victim,
                                             effects=self._effects(), confirm=self.confirm,
-                                            resource=self.email, mutate=self.mutate))
+                                            resource=self.email, mutate=self.mutate,
+                                            canary=self.canary))
         self.probes_run += 1
         unbound = [s.action for s in trace.steps
                    if s.obs and not s.obs.ok and "no binding" in (s.obs.note or "")]
@@ -492,7 +497,8 @@ class HuntSession:
         a = self._adapter(self.control)
         return run_plan(a, plan, AtoOracle(a, self.attacker, self.victim,
                                            effects=self._effects(), confirm=self.confirm,
-                                           resource=self.email, mutate=self.mutate))
+                                           resource=self.email, mutate=self.mutate,
+                                           canary=self.canary))
 
     def _verdict(self, plan):
         return self._run_pair(plan)[0]

@@ -28,6 +28,11 @@ class _Account:
         self.email_verified = False
         self.password: Optional[str] = None      # one credential bound to the row
         self.marker: Optional[str] = None        # the private resource that holds a canary
+        # A private, stable, high-entropy value the SERVER generates at account creation —
+        # a wallet handle, a loyalty id. Nothing plants it, so it is what an engagement
+        # that authorises reads and not writes has to use as ground truth (a "natural
+        # canary"; see oracle._observe_natural_canary).
+        self.handle: str = secrets.token_hex(12)
         self.sessions: set[str] = set()
         self.factors: set[str] = set()           # enrolled 2nd-factor ids (passkey/biometric)
         self.aliases: set[str] = set()           # recovery/secondary emails that resolve here

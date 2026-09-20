@@ -1632,5 +1632,197 @@ class TestLiveSessionGating(unittest.TestCase):
             self.assertIn("identity:victim", r["blocking_failures"])
 
 
+class TestNaturalCanary(unittest.TestCase):
+    """Most engagements authorise reads and not writes, so the oracle must be able to use
+    a private value the victim ALREADY holds instead of planting one. That value is weaker
+    evidence by construction, so each property a planted secret gets for free — stable,
+    distinct, informative, not attacker-supplied — is measured instead of assumed."""
+
+    NATURAL = "e0c4f6e08459dc42a91b77c3"      # what an account id / wallet handle looks like
+
+    class NoWrites(MockAdapter):
+        """A read-only target: it exposes a private per-account value and REFUSES writes,
+        the shape a read-only rule of engagement forces. The value is per-account, as real
+        private state is — a fixture that returned one constant would (correctly) be
+        rejected by the distinctness control rather than testing anything."""
+
+        def read_marker(self, p, ref=None):
+            obs = super().read_marker(p, ref=ref)
+            if ref is None and obs.extracted.get("value") is None:
+                acc = self.t.account_of(self.sess.get(p.name))
+                if acc is not None:
+                    obs.extracted["value"] = (self._preset_marker if acc.email == EMAIL
+                                              else "other-" + acc.id + "-8f3b1d9c4e7a")
+            return obs
+
+        def plant_marker(self, p, value):
+            raise AssertionError("natural mode must never write")
+
+        def write_marker(self, p, value, ref=None):
+            raise AssertionError("natural mode must never write")
+
+    def _probe(self, adapter_cls=MockAdapter, patched=False, marker=None, **kw):
+        from tpihunter.enumerator import make_candidate
+        attacker, victim = _principals()
+        a = adapter_cls(patched=patched, control={victim.name: {EMAIL}}, **kw)
+        plan = make_candidate((("attacker", "register"), ("victim", "sso_login")),
+                              attacker, victim, EMAIL).plan
+        a._preset_marker = marker if marker is not None else self.NATURAL
+        return run_plan(a, plan, AtoOracle(a, attacker, victim, resource=EMAIL,
+                                           canary="natural"))[0]
+
+    def test_a_natural_canary_finds_the_bug_without_writing_anything(self):
+        v = self._probe(self.NoWrites)
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertEqual(v.clause_id, "TPI-1")
+        self.assertEqual(v.controls["canary_mode"], "natural")
+        self.assertTrue(v.controls["natural_canary_stable"])
+        self.assertTrue(v.controls["natural_canary_distinct"])
+        self.assertGreaterEqual(v.controls["natural_canary_bits"], 32)
+
+    def test_natural_mode_still_discriminates_on_the_patched_target(self):
+        self.assertEqual(self._probe(self.NoWrites, patched=True).severity.value, "safe")
+
+    def test_a_constant_is_not_a_canary(self):
+        # every account's field holds the same value -> it is a schema default, not state
+        class Constant(MockAdapter):
+            def read_marker(self, p, ref=None):
+                from tpihunter.types import Observation
+                return Observation(True, extracted={"value": self._preset_marker})
+        v = self._probe(Constant)
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "canary_not_distinct")
+        self.assertFalse(v.controls["natural_canary_distinct"])
+
+    def test_a_value_that_changes_between_reads_is_not_a_canary(self):
+        class Nonce(MockAdapter):
+            def read_marker(self, p, ref=None):
+                import secrets as _s
+                from tpihunter.types import Observation
+                return Observation(True, extracted={"value": _s.token_hex(12)})
+        v = self._probe(Nonce)
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "canary_unstable")
+
+    def test_a_low_entropy_value_is_not_a_canary(self):
+        class Flag(MockAdapter):
+            def read_marker(self, p, ref=None):
+                from tpihunter.types import Observation
+                return Observation(True, extracted={"value": self._preset_marker})
+        v = self._probe(Flag, marker="0")
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "canary_low_entropy")
+
+    def test_a_value_the_attacker_supplied_is_not_evidence(self):
+        # the victim's "private" field holds the shared email, which the attacker typed in:
+        # reading it back may be reflection, not access
+        class Reflects(MockAdapter):
+            def read_marker(self, p, ref=None):
+                from tpihunter.types import Observation
+                acc = self.t.account_of(self.sess.get(p.name))
+                return Observation(acc is not None,
+                                   extracted={"value": acc.email if acc else None})
+        v = self._probe(Reflects)
+        self.assertEqual(v.severity.value, "inconclusive")
+        self.assertEqual(v.withheld, "canary_attacker_known")
+
+    def test_natural_mode_refuses_to_enable_the_write_probe(self):
+        attacker, victim = _principals()
+        a = MockAdapter(control={victim.name: {EMAIL}})
+        self.assertFalse(AtoOracle(a, attacker, victim, canary="natural", mutate=True).mutate)
+        self.assertTrue(AtoOracle(a, attacker, victim, canary="planted", mutate=True).mutate)
+
+    def test_an_unknown_canary_mode_is_refused(self):
+        attacker, victim = _principals()
+        with self.assertRaises(ValueError):
+            AtoOracle(MockAdapter(), attacker, victim, canary="borrowed")
+
+
+class TestNaturalCanaryOverHttp(unittest.TestCase):
+    """The read-only shape, end to end: a profile with no write route at all, validated
+    and hunted over HTTP. This is what a rules-of-engagement that authorises reads and
+    not writes forces, which is most of them."""
+
+    def _bits(self, url):
+        from tpihunter.http_mock import engagement_for, readonly_profile_for
+        from tpihunter.policy import EngagementPolicy
+        from tpihunter.profile import TargetProfile
+        return (TargetProfile.from_dict(readonly_profile_for(url)),
+                EngagementPolicy.from_dict(engagement_for(url)))
+
+    def test_profile_rejects_a_write_route_in_natural_mode(self):
+        from tpihunter.http_mock import readonly_profile_for
+        from tpihunter.profile import ProfileError, TargetProfile
+        raw = readonly_profile_for("http://127.0.0.1:1/")
+        raw["oracle"]["write_marker"] = {"method": "PUT", "path": "/api/me/wallet"}
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict(raw)
+        self.assertIn("must declare no write route", str(cm.exception))
+
+    def test_profile_requires_a_write_route_in_planted_mode(self):
+        from tpihunter.http_mock import profile_for
+        from tpihunter.profile import ProfileError, TargetProfile
+        raw = profile_for("http://127.0.0.1:1/")
+        raw["oracle"].pop("plant_marker"); raw["oracle"].pop("write_marker")
+        raw["oracle"].pop("write_marker_by_ref")
+        with self.assertRaises(ProfileError) as cm:
+            TargetProfile.from_dict(raw)
+        self.assertIn('"canary": "natural"', str(cm.exception))
+
+    def test_validation_measures_the_natural_canary_instead_of_planting(self):
+        from tpihunter.http_mock import serve
+        from tpihunter.validate import validate_target
+        with serve() as url:
+            prof, policy = self._bits(url)
+            v = validate_target(prof, policy)
+        self.assertTrue(v.ready)
+        by = {c.name: c for c in v.checks}
+        self.assertEqual(by["canary"].status, "pass")
+        self.assertIn("no write issued", by["canary"].detail)
+        self.assertEqual(by["canary_distinct"].status, "pass")
+        self.assertFalse([a for a in v.artifacts if "marker" in a])   # nothing written
+
+    def test_read_only_hunt_finds_the_same_bugs_and_writes_nothing(self):
+        from tpihunter.http_mock import VICTIM_EMAIL, serve
+        from tpihunter.live import live_adapter
+        attacker, victim = _principals()
+
+        def hunt(url, prof, policy):
+            return AgentHunter(
+                lambda: live_adapter(prof, policy, control={victim.name: {VICTIM_EMAIL}}),
+                attacker, victim, VICTIM_EMAIL, budget=300, canary=prof.canary).hunt(
+                    EnumeratorStrategist(max_attacker=1, max_victim=2))
+
+        with serve(patched=False) as url:
+            prof, policy = self._bits(url)
+            res = hunt(url, prof, policy)
+            audit = None
+        self.assertEqual(sorted(b.clause_id for b in res.bugs), ["TPI-1", "TPI-4"])
+
+        with serve(patched=True) as url:
+            prof, policy = self._bits(url)
+            self.assertEqual(hunt(url, prof, policy).bugs, [])
+
+    def test_no_write_request_is_ever_issued_in_natural_mode(self):
+        # the audit trail is the evidence: every request, and not one of them a write
+        from tpihunter.http_mock import VICTIM_EMAIL, serve
+        from tpihunter.live import live_adapter
+        from tpihunter.policy import AuditLog
+        from tpihunter.enumerator import make_candidate
+        attacker, victim = _principals()
+        log = AuditLog()
+        with serve(patched=False) as url:
+            prof, policy = self._bits(url)
+            a = live_adapter(prof, policy, control={victim.name: {VICTIM_EMAIL}}, audit=log)
+            plan = make_candidate((("attacker", "register"), ("victim", "sso_login")),
+                                  attacker, victim, VICTIM_EMAIL).plan
+            v = run_plan(a, plan, AtoOracle(a, attacker, victim, resource=VICTIM_EMAIL,
+                                            canary="natural"))[0]
+        self.assertEqual(v.severity.value, "takeover")
+        self.assertEqual(v.controls["canary_mode"], "natural")
+        writes = [r for r in log.records if r.action.startswith(("PUT ", "PATCH ", "DELETE "))]
+        self.assertEqual(writes, [], f"natural mode issued writes: {[r.action for r in writes]}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -71,6 +71,7 @@ surfaced in `Verdict.controls` rather than silently leaving the victim's data co
 """
 from __future__ import annotations
 
+import math
 import secrets
 from collections import Counter
 from dataclasses import dataclass, field
@@ -111,6 +112,29 @@ class Withheld(str, Enum):
     ATTACKER_PROVED_CONTROL = "attacker_proved_control"
     NO_ATTACKER_ACTION = "no_attacker_action"
     CANARY_NOT_PLANTED = "canary_not_planted"
+    # natural-canary mode only — the observed value failed a control that a planted
+    # secret satisfies by construction
+    CANARY_NOT_DISTINCT = "canary_not_distinct"
+    CANARY_UNSTABLE = "canary_unstable"
+    CANARY_LOW_ENTROPY = "canary_low_entropy"
+    CANARY_ATTACKER_KNOWN = "canary_attacker_known"
+
+
+# A natural canary must carry at least this much information before a match counts as
+# evidence rather than coincidence.
+MIN_CANARY_BITS = 32
+MIN_CANARY_LEN = 8
+
+
+def canary_bits(value: str) -> float:
+    """A deliberately crude estimate: length x log2(distinct symbols actually used).
+
+    Crude is the point — it is a floor for rejecting "0", "true" and "USD", not a
+    cryptographic measure. A value that clears it is merely eligible to be evidence;
+    the distinctness and stability controls are what make it evidence."""
+    v = (value or "").strip()
+    alphabet = len(set(v))
+    return len(v) * math.log2(alphabet) if alphabet > 1 else 0.0
 
 
 @dataclass
@@ -137,7 +161,8 @@ class AtoOracle:
     def __init__(self, adapter, attacker: Principal, victim: Principal,
                  effects: Optional[dict] = None, confirm: int = 0,
                  resource: Optional[str] = None, mutate: bool = False,
-                 bystander: Optional[Principal] = DEFAULT_BYSTANDER) -> None:
+                 bystander: Optional[Principal] = DEFAULT_BYSTANDER,
+                 canary: str = "planted") -> None:
         self.a = adapter
         self.attacker = attacker
         self.victim = victim
@@ -155,7 +180,18 @@ class AtoOracle:
         self.confirm = max(0, int(confirm))
         # Attempt the destructive cross-principal WRITE probe. Off by default: it mutates
         # another principal's private resource, which many rules of engagement forbid.
-        self.mutate = bool(mutate)
+        # Never in natural mode: that mode exists precisely because writes are not
+        # authorised, so honouring a write request there would defeat the point.
+        self.mutate = bool(mutate) and canary == "planted"
+        # "planted": write a 128-bit secret into the victim's private resource — the
+        # strongest evidence, and it needs a write. "natural": OBSERVE a private value the
+        # victim already has, for engagements whose rules of engagement authorise reads
+        # and not writes. A natural canary is weaker by construction (it was not generated
+        # by us, so it could be a constant, a nonce, or something the attacker supplied)
+        # and is therefore gated by four extra controls — see _observe_natural_canary.
+        if canary not in ("planted", "natural"):
+            raise ValueError("canary must be 'planted' or 'natural'")
+        self.canary_mode = canary
         self._canary = secrets.token_hex(16)   # 128-bit ground-truth secret
         # A distinct value for the write probe: never re-use the canary as the thing we
         # write, so the ground-truth secret is never planted anywhere we did not plant it.
@@ -167,6 +203,7 @@ class AtoOracle:
         self._victim_id: Optional[str] = None
         self._victim_ref: Optional[str] = None
         self._planted = False
+        self._natural_failure: Optional[str] = None
         self._attacker_acted_before_arm = False
         self.baseline: list[Evidence] = []
         self.controls: dict = {}
@@ -219,16 +256,71 @@ class AtoOracle:
 
     # -- phase 2 --------------------------------------------------------------
     def plant(self) -> "AtoOracle":
-        """Write the canary as the victim, then POSITIVE-control it by reading it back.
-
-        If the read-back does not return the canary the canary is not there, every later
-        comparison against it is vacuous, and a SAFE verdict would be a false negative.
-        """
+        """Establish the ground truth: plant a canary, or observe a natural one."""
+        self.controls["canary_mode"] = self.canary_mode
+        if self.canary_mode == "natural":
+            return self._observe_natural_canary()
         m = self.a.plant_marker(self.victim, self._canary)
         self._victim_ref = m.extracted.get("ref")
         back = self.a.read_marker(self.victim, ref=self._victim_ref)
         self._planted = back.extracted.get("value") == self._canary
         self.controls["canary_planted"] = self._planted
+        return self
+
+    def _observe_natural_canary(self) -> "AtoOracle":
+        """Use a private value the victim ALREADY holds as the ground truth.
+
+        A planted secret is self-evidently private, unique and stable. An observed value
+        is none of those for free, so each property is measured instead of assumed:
+
+          STABLE     read twice by its owner and unchanged — otherwise it is a nonce or a
+                     timestamp, and both a match and a mismatch would be meaningless.
+          DISTINCT   different from the BYSTANDER's value for the same field — otherwise
+                     it is a constant (a default balance, a currency code, a schema
+                     version) and any account "matching" it proves nothing.
+          INFORMATIVE at least MIN_CANARY_BITS of estimated information, so a match is
+                     not coincidence.
+
+        The fourth property — that the attacker did not simply supply the value — cannot
+        be checked here because the trace is not available until assess(); it is enforced
+        by the CANARY_ATTACKER_KNOWN guard.
+
+        Failing any of these is not a SAFE result: it means this probe has no ground truth,
+        so the verdict is INCONCLUSIVE and `withheld` names which control failed.
+        """
+        first = self.a.read_marker(self.victim)
+        value = first.extracted.get("value")
+        self._victim_ref = first.extracted.get("ref") or self._victim_id
+        if not isinstance(value, str) or not value.strip():
+            self.controls["natural_canary"] = "the victim's private field returned no value"
+            self._planted = False
+            return self
+
+        value = value.strip()
+        again = self.a.read_marker(self.victim)
+        stable = again.extracted.get("value") == value
+        self.controls["natural_canary_stable"] = stable
+
+        bits = canary_bits(value)
+        informative = len(value) >= MIN_CANARY_LEN and bits >= MIN_CANARY_BITS
+        self.controls["natural_canary_bits"] = round(bits, 1)
+
+        distinct = None
+        if self._bystander_ready:
+            other = self.a.read_marker(self.bystander).extracted.get("value")
+            distinct = (other is None) or (str(other).strip() != value)
+            self.controls["natural_canary_distinct"] = distinct
+        else:
+            self.controls["natural_canary_distinct"] = (
+                "unverified — no bystander, so a constant cannot be ruled out")
+
+        self._canary = value
+        self._planted = bool(stable and informative and distinct is not False)
+        self.controls["canary_planted"] = self._planted
+        self._natural_failure = (
+            Withheld.CANARY_UNSTABLE.value if not stable else
+            Withheld.CANARY_LOW_ENTROPY.value if not informative else
+            Withheld.CANARY_NOT_DISTINCT.value if distinct is False else None)
         return self
 
     # -- phase 3 --------------------------------------------------------------
@@ -270,12 +362,18 @@ class AtoOracle:
         if not self._planted:
             # The positive control failed: no canary existed, so a SAFE reading is
             # meaningless too. Report it as such rather than as a secure result.
-            return Severity.INCONCLUSIVE, 0.0, Withheld.CANARY_NOT_PLANTED.value
+            return (Severity.INCONCLUSIVE, 0.0,
+                    self._natural_failure or Withheld.CANARY_NOT_PLANTED.value)
         if severity is Severity.SAFE:
             return severity, confidence, None
 
         if self._confluence_predates_the_attack():
             return Severity.INCONCLUSIVE, 0.0, Withheld.NOT_INDEPENDENT.value
+
+        if self.canary_mode == "natural" and self._attacker_supplied_the_canary(trace):
+            # A natural canary the attacker itself submitted proves nothing: the "read"
+            # may be its own input reflected back. A planted secret cannot hit this.
+            return Severity.INCONCLUSIVE, 0.0, Withheld.CANARY_ATTACKER_KNOWN.value
 
         justification = self._attacker_proof_of_control(trace)
         if justification is not None:
@@ -286,6 +384,17 @@ class AtoOracle:
             return Severity.INCONCLUSIVE, 0.0, Withheld.NO_ATTACKER_ACTION.value
 
         return severity, confidence, None
+
+    def _attacker_supplied_the_canary(self, trace: Trace) -> bool:
+        """Did the attacker hand the target the very value we are treating as private?"""
+        needle = (self._canary or "").strip().lower()
+        if not needle:
+            return False
+        for step in trace.by_principal(self.attacker):
+            for v in (step.params or {}).values():
+                if isinstance(v, str) and needle in v.strip().lower():
+                    return True
+        return False
 
     def _confluence_predates_the_attack(self) -> bool:
         """True if the contexts were already one identity before the attacker acted —
@@ -405,10 +514,12 @@ class AtoOracle:
                                f"attacker session resolves to victim identity "
                                f"'{untrusted(who.identity)}'", 3))
         if self._planted:
+            what = ("planted canary" if self.canary_mode == "planted"
+                    else "private field value")
             r = self.a.read_marker(self.attacker)              # confluence read (my-account)
             if r.extracted.get("value") == self._canary:
                 ev.append(Evidence("canary_read",
-                                   "attacker's own session returns the victim's planted canary", 3))
+                                   f"attacker's own session returns the victim's {what}", 3))
             if self._victim_ref is not None and self._ref_reads_are_scoped():
                 r2 = self.a.read_marker(self.attacker, ref=self._victim_ref)   # direct-object read
                 if r2.extracted.get("value") == self._canary:
@@ -476,6 +587,24 @@ class AtoOracle:
 
         return None, None, None
 
+    _NATURAL_NARRATIVE = {
+        Withheld.CANARY_UNSTABLE.value:
+            "Inconclusive: the private value used as ground truth changed between two reads "
+            "by its own owner, so it is a nonce or a timestamp. Neither a match nor a "
+            "mismatch against it would mean anything. Point read_marker at a stable field.",
+        Withheld.CANARY_LOW_ENTROPY.value:
+            "Inconclusive: the private value used as ground truth carries too little "
+            "information to distinguish an account (a default, a flag, a currency code), so "
+            "a match would be coincidence. Point read_marker at a high-entropy field.",
+        Withheld.CANARY_NOT_DISTINCT.value:
+            "Inconclusive: an uninvolved account's copy of the same field holds the SAME "
+            "value, so it is a constant rather than private state. Nothing can be concluded "
+            "from another account matching it.",
+        Withheld.CANARY_ATTACKER_KNOWN.value:
+            "Inconclusive: the value used as ground truth was itself submitted by the "
+            "attacker, so reading it back may be reflection rather than access.",
+    }
+
     _WITHHELD_NARRATIVE = {
         Withheld.NOT_INDEPENDENT.value:
             "Not a finding: the attacker context already resolved to the victim's identity "
@@ -497,7 +626,8 @@ class AtoOracle:
 
     def _narrate(self, sev, ev, clause_id, laundered, withheld=None) -> str:
         if withheld:
-            body = self._WITHHELD_NARRATIVE.get(withheld, f"Finding withheld: {withheld}.")
+            body = self._NATURAL_NARRATIVE.get(withheld) or self._WITHHELD_NARRATIVE.get(
+                withheld, f"Finding withheld: {withheld}.")
             extra = self.controls.get("attacker_justification")
             return f"{body} ({extra})" if extra else body
         if sev is Severity.SAFE:

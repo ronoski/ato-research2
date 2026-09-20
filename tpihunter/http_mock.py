@@ -27,6 +27,7 @@ from .mock_target import VulnerableTarget
 
 BIND_HOST = "127.0.0.1"          # never anything else: this server is vulnerable by design
 _USER_NOTE = re.compile(r"^/api/users/([^/]+)/note$")
+_USER_WALLET = re.compile(r"^/api/users/([^/]+)/wallet$")
 
 
 class _App:
@@ -108,8 +109,14 @@ class _Handler(BaseHTTPRequestHandler):
             acc = self._account()
             return (self._send(200, {"id": acc.id, "note": acc.marker}) if acc
                     else self._send(401, {"error": "no session"}))
-        m = _USER_NOTE.match(path)
-        if m:
+        if path == "/api/me/wallet":
+            acc = self._account()
+            return (self._send(200, {"id": acc.id, "handle": acc.handle}) if acc
+                    else self._send(401, {"error": "no session"}))
+        for rx, field in ((_USER_NOTE, "note"), (_USER_WALLET, "handle")):
+            m = rx.match(path)
+            if not m:
+                continue
             acc = self._account()
             if acc is None:
                 return self._send(401, {"error": "no session"})
@@ -118,7 +125,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "no such resource"})
             if target.id != acc.id and not self.app.flat_idor:
                 return self._send(403, {"error": "not yours"})
-            return self._send(200, {"id": target.id, "note": target.marker})
+            return self._send(200, {"id": target.id,
+                                    field: getattr(target, "marker" if field == "note"
+                                                   else "handle")})
         return self._send(404, {"error": "no such route"})
 
     def do_PUT(self) -> None:
@@ -220,6 +229,22 @@ def profile_for(base_url: str) -> dict:
         "channel": {"method": "GET", "path": "/testing/inbox?address={email}", "expect": [200],
                     "extract": {"token": {"regex": "token=([A-Za-z0-9]+)"}}},
     }
+
+
+def readonly_profile_for(base_url: str) -> dict:
+    """The same target, described for a READ-ONLY engagement: no write route is declared,
+    and ground truth is the wallet handle the server itself issued. This is the shape a
+    rules-of-engagement that authorises reads and not writes forces."""
+    prof = profile_for(base_url)
+    prof["canary"] = "natural"
+    prof["oracle"] = {
+        "whoami": prof["oracle"]["whoami"],
+        "read_marker": {"method": "GET", "path": "/api/me/wallet", "expect": [200],
+                        "extract": {"value": {"json": "handle"}, "ref": {"json": "id"}}},
+        "read_marker_by_ref": {"method": "GET", "path": "/api/users/{ref}/wallet",
+                               "expect": [200], "extract": {"value": {"json": "handle"}}},
+    }
+    return prof
 
 
 def engagement_for(base_url: str) -> dict:

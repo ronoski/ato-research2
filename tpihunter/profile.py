@@ -302,6 +302,7 @@ class TargetProfile:
     actions: dict                  # action name -> Request
     oracle: dict                   # surface name -> Request
     channel: Optional[Request] = None
+    canary: str = "planted"        # "planted" (needs a writable private field) | "natural"
     verify_tls: bool = True
     timeout: float = 10.0
     max_bytes: int = 262_144
@@ -383,6 +384,21 @@ class TargetProfile:
                 problems.append("channel.extract.token: required — it is how a mailed "
                                 "reset/magic-link token is recovered")
 
+        canary = str(raw.get("canary", "planted"))
+        if canary not in ("planted", "natural"):
+            problems.append("canary: must be 'planted' (write a secret into a private "
+                            "field) or 'natural' (observe one the account already has — "
+                            "for a rules-of-engagement that authorises reads, not writes)")
+            canary = "planted"
+        if canary == "planted" and not ({"plant_marker", "write_marker"} & set(oracle)):
+            problems.append("oracle.plant_marker: required in 'planted' canary mode — "
+                            "declare one, or set \"canary\": \"natural\" if the "
+                            "engagement does not authorise writes")
+        if canary == "natural" and ({"plant_marker", "write_marker", "write_marker_by_ref"}
+                                    & set(oracle)):
+            problems.append("oracle: 'natural' canary mode must declare no write route — "
+                            "remove plant_marker/write_marker so a write cannot be issued")
+
         verify_tls = bool(raw.get("verify_tls", True))
         try:
             timeout = float(raw.get("timeout", 10.0))
@@ -404,8 +420,8 @@ class TargetProfile:
                                + "\n  - ".join(problems))
         return TargetProfile(name=name, base_url=base_url.rstrip("/"), accounts=accounts,
                              session=session, actions=actions, oracle=oracle,
-                             channel=channel, verify_tls=verify_tls, timeout=timeout,
-                             max_bytes=max_bytes)
+                             channel=channel, canary=canary, verify_tls=verify_tls,
+                             timeout=timeout, max_bytes=max_bytes)
 
     # -- helpers --------------------------------------------------------------
     @property
@@ -426,5 +442,6 @@ class TargetProfile:
             "actions": sorted(self.actions),
             "oracle": sorted(self.oracle),
             "channel": self.channel is not None,
+            "canary": self.canary,
             "verify_tls": self.verify_tls,
         }

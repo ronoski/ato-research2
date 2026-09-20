@@ -95,6 +95,44 @@ class Validation:
         return "\n".join(lines)
 
 
+def _check_natural_canary(inner, profile, v) -> tuple:
+    """Natural mode: the ground truth is a value the account already holds, so the three
+    properties a planted secret has for free are measured here instead of assumed.
+
+    Reported as separate checks rather than one, because each failure has a different fix:
+    an unstable field is the wrong field, a low-entropy one is the wrong field, and a
+    constant one means the route is not returning per-account state at all."""
+    from .oracle import MIN_CANARY_BITS, MIN_CANARY_LEN, canary_bits
+    first = inner.read_marker(VICTIM)
+    value = first.extracted.get("value")
+    ref = first.extracted.get("ref") or inner.whoami(VICTIM).identity
+    if not isinstance(value, str) or not value.strip():
+        v.checks.append(Check("canary", "fail",
+                              "the victim's private field returned no value",
+                              "Fix oracle.read_marker: point it at a private per-account "
+                              "field and make extract.value select it."))
+        return None, ref
+    value = value.strip()
+
+    bits = canary_bits(value)
+    if len(value) < MIN_CANARY_LEN or bits < MIN_CANARY_BITS:
+        v.checks.append(Check("canary", "fail",
+                              f"the value carries ~{bits:.0f} bits — too little to tell one "
+                              f"account from another, so a match would be coincidence",
+                              "Point oracle.read_marker at a higher-entropy private field "
+                              "(an account id, a handle) rather than a flag or a count."))
+        return None, ref
+    if inner.read_marker(VICTIM).extracted.get("value") != value:
+        v.checks.append(Check("canary", "fail",
+                              "the value changed between two reads by its own owner",
+                              "That field is a nonce or a timestamp. Point "
+                              "oracle.read_marker at a stable private field."))
+        return None, ref
+    v.checks.append(Check("canary", "pass",
+                          f"observed a stable private value (~{bits:.0f} bits), no write issued"))
+    return value, ref
+
+
 def validate_target(profile: TargetProfile, policy: EngagementPolicy,
                     audit: Optional[AuditLog] = None) -> Validation:
     """Run the profile against the target and report what works."""
@@ -168,24 +206,28 @@ def validate_target(profile: TargetProfile, policy: EngagementPolicy,
         v.checks.append(Check("independence", "pass",
                               "the two principals resolve to two different accounts"))
 
-    # 5. positive control: the victim can plant a canary and read it back
-    canary = "tpihunter-validate-" + secrets.token_hex(12)
-    planted = inner.plant_marker(VICTIM, canary)
-    ref = planted.extracted.get("ref")
-    back = inner.read_marker(VICTIM)
-    if back.extracted.get("value") != canary:
-        v.checks.append(Check("canary", "fail",
-                              "the victim could not read back what it just planted",
-                              "Fix oracle.plant_marker / oracle.read_marker: they must "
-                              "write and read the SAME private per-account field, and "
-                              "read_marker.extract.value must point at it."))
+    # 5. positive control: there is a ground truth to compare against at all
+    if profile.canary == "natural":
+        canary, ref = _check_natural_canary(inner, profile, v)
     else:
-        v.artifacts.append(f"marker on {profile.accounts[VICTIM.name].email} "
-                           f"(left holding a validation canary)")
-        v.checks.append(Check("canary", "pass", "planted and read back by the owner"))
+        canary = "tpihunter-validate-" + secrets.token_hex(12)
+        planted = inner.plant_marker(VICTIM, canary)
+        ref = planted.extracted.get("ref")
+        back = inner.read_marker(VICTIM)
+        if back.extracted.get("value") != canary:
+            v.checks.append(Check("canary", "fail",
+                                  "the victim could not read back what it just planted",
+                                  "Fix oracle.plant_marker / oracle.read_marker: they must "
+                                  "write and read the SAME private per-account field, and "
+                                  "read_marker.extract.value must point at it."))
+            canary = None
+        else:
+            v.artifacts.append(f"marker on {profile.accounts[VICTIM.name].email} "
+                               f"(left holding a validation canary)")
+            v.checks.append(Check("canary", "pass", "planted and read back by the owner"))
 
     # 6. the by-reference route works for its owner, and is refused for anyone else
-    if ref is None or "read_marker_by_ref" not in profile.oracle:
+    if canary is None or ref is None or "read_marker_by_ref" not in profile.oracle:
         v.checks.append(Check("by_ref", "skip",
                               "profile declares no read_marker_by_ref",
                               "Add oracle.read_marker_by_ref to let the oracle ask the "
@@ -223,6 +265,27 @@ def validate_target(profile: TargetProfile, policy: EngagementPolicy,
             else:
                 v.checks.append(Check("negative_control", "pass",
                                       "an invalid reference is refused"))
+
+    # 7a. natural mode only: the value must not be a constant every account shares
+    if profile.canary == "natural" and canary is not None:
+        if "bystander" not in profile.accounts:
+            v.checks.append(Check("canary_distinct", "skip",
+                                  "no bystander account — a constant cannot be ruled out",
+                                  "Add a third account; in natural mode it is what proves "
+                                  "the field holds per-account state.", blocking=False))
+        else:
+            enrolled = inner.enrol_bystander(BYSTANDER)
+            other = (inner.read_marker(BYSTANDER).extracted.get("value")
+                     if enrolled.ok else None)
+            if other is not None and str(other).strip() == canary:
+                v.checks.append(Check("canary_distinct", "fail",
+                                      "an uninvolved account's copy of the same field holds "
+                                      "the SAME value — it is a constant, not private state",
+                                      "Point oracle.read_marker at a field that differs "
+                                      "between accounts."))
+            else:
+                v.checks.append(Check("canary_distinct", "pass",
+                                      "the value differs from an uninvolved account's"))
 
     # 7. the diagnosis control
     if "bystander" not in profile.accounts:
