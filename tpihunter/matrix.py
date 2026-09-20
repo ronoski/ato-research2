@@ -123,6 +123,14 @@ def default_mutations(email: str) -> list[MutationSpec]:
                      revokes_kinds=frozenset({"session"}),
                      # the acting context must itself stop authenticating
                      verify=lambda a, p: not a.whoami(p).ok),
+        # NOTE on `factor` here, learned on a live target. A passkey surviving a password
+        # change is STANDARD WebAuthn behaviour — the credential is deliberately independent
+        # of the password — so asserting it as an obligation makes this cell fire on every
+        # passkey-supporting target. It is kept only because a reset is a REMEDIATION action
+        # and the pairing is a real gap when the target's own compromise guidance says
+        # "change your password" and nothing else. Read a finding here as "the remediation
+        # story is incomplete", not "the authenticator is broken", and check what the target
+        # actually tells a compromised user to do before reporting it.
         MutationSpec("password_reset",
                      (("reset_request", {"email": email}),
                       ("reset_consume", {"email": email, "new_password": password("owner:reset")})),
