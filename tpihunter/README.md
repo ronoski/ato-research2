@@ -138,6 +138,37 @@ by default (`AtoOracle(..., mutate=True)` enables it). When on, it writes a valu
 never the canary, and the restore is verified — a failure is recorded in
 `Verdict.controls`, not left silently corrupting the target.
 
+## Credential structure (the fifth mode)
+
+TPI reasons about a binding: who holds it, what proof justifies it, what revokes it. The
+binding's **handle** — the session cookie, the reset token, the bearer — is an atom to it.
+So a handle that is *derivable* rather than unguessable is invisible: an attacker who
+predicts the next one holds a binding with no proof event behind it, and the trace the
+oracle reads contains nothing at all.
+
+The hard part is doing it honestly. Positional analysis over a handful of samples **always**
+looks alarming — with six tokens no character position can show more than six values, and
+a naive reading calls that structure. So every structural claim is made **differentially**,
+against reference samples drawn from `secrets` at the same length *and the same sample
+count*. A handle is called weak only when it scores materially worse than randomness
+measured the same crippled way.
+
+Two further gates, both added after the mode produced false positives on its first real
+target:
+
+* **entropy is not a finding until the value is shown to authenticate.** A 10-digit
+  browser-state cookie sitting beside a real session cookie was flagged "low-entropy
+  handle" — true of the string, and meaningless. `CredentialSample(..., authenticates=True)`
+  is how you say it grants access; unknown yields a note, not a finding.
+* **a JWT is never flagged for its fixed layout.** The header and claim names repeat in
+  every correct token, so the structural test fires on all of them — a sound HS256 session
+  cookie scored 173 bits against a 619-bit baseline for no reason but `{"alg":"HS256"}`.
+  What matters for a JWT is the signature and the claims.
+
+Where a question needs another mode, it says so rather than guessing: a two-year `exp` is
+only a two-year bearer if revocation is *not* server-side, which this mode cannot see, so
+it defers to the revocation matrix.
+
 ## Concurrency (the fourth mode)
 
 A single-use proof consumed twice is two bindings from one proof — a provenance violation

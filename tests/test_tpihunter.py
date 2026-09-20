@@ -2569,5 +2569,93 @@ class TestRaceMode(unittest.TestCase):
                                       Attempt(1, False, 1.1, 2.0)]), 1)
 
 
+class TestCredentialStructure(unittest.TestCase):
+    """The other thing the state machine treats as opaque. A binding's HANDLE that is
+    derivable rather than unguessable gives an attacker a binding with no proof event
+    behind it — and the trace the oracle reads contains nothing at all."""
+
+    def _samples(self, values, **kw):
+        from tpihunter.credentials import CredentialSample
+        return [CredentialSample(v, "t", **kw) for v in values]
+
+    def test_randomness_is_not_flagged_at_small_sample_counts(self):
+        """The trap this mode exists to avoid: with six tokens no position can show more
+        than six values, so a naive reading calls every set structured."""
+        import secrets
+        from tpihunter.credentials import analyse
+        rep = analyse(self._samples([secrets.token_hex(16) for _ in range(6)],
+                                    authenticates=True))
+        self.assertEqual(rep.findings, [], rep.render())
+        self.assertTrue(rep.sound)
+
+    def test_a_sequential_handle_is_caught(self):
+        from tpihunter.credentials import CredentialSample, analyse
+        vals = [f"{'a'*24}{i:08x}" for i in range(6)]
+        rep = analyse([CredentialSample(v, "t", minted_at=float(i), authenticates=True)
+                       for i, v in enumerate(vals)])
+        kinds = {f.kind for f in rep.findings}
+        self.assertIn("structured-handle", kinds)
+        self.assertIn("monotonic-handle", kinds)
+
+    def test_entropy_is_not_a_finding_until_the_value_is_shown_to_authenticate(self):
+        """Measured live: a 10-digit browser-state cookie beside a real session cookie was
+        flagged 'low-entropy handle' — true of the string, meaningless as a finding."""
+        from tpihunter.credentials import analyse
+        vals = [f"7198{i:06d}" for i in range(6)]
+        unknown = analyse(self._samples(vals))
+        self.assertEqual(unknown.findings, [])
+        self.assertTrue(any("authenticates anything" in n for n in unknown.notes))
+        shown = analyse(self._samples(vals, authenticates=True))
+        self.assertTrue(any(f.kind == "low-entropy-handle" for f in shown.findings))
+
+    def test_a_jwt_is_never_flagged_for_its_fixed_layout(self):
+        """Measured live: a sound HS256 session cookie scored 173 bits against a 619-bit
+        baseline purely because the header and claim names repeat. Running the structural
+        test on a JWT guarantees a false positive on every correct token."""
+        import base64, json as _j, secrets
+        from tpihunter.credentials import Shape, analyse
+        def jwt(sub):
+            def seg(d): return base64.urlsafe_b64encode(_j.dumps(d).encode()).rstrip(b"=").decode()
+            return (seg({"alg": "HS256"}) + "." +
+                    seg({"jti": secrets.token_hex(5), "sub": sub, "typ": "session",
+                         "iat": 1789880264, "exp": 1789880264 + 3600}) + "." +
+                    secrets.token_urlsafe(32))
+        rep = analyse(self._samples([jwt("acct") for _ in range(6)], authenticates=True))
+        self.assertEqual(rep.shape, Shape.JWT)
+        self.assertFalse([f for f in rep.findings if f.kind == "structured-handle"])
+        self.assertFalse(rep.controls["structure_measured"])
+
+    def test_alg_none_and_missing_expiry_are_findings(self):
+        import base64, json as _j
+        from tpihunter.credentials import analyse
+        def seg(d): return base64.urlsafe_b64encode(_j.dumps(d).encode()).rstrip(b"=").decode()
+        tok = seg({"alg": "none"}) + "." + seg({"sub": "acct"}) + "." + "x"
+        rep = analyse(self._samples([tok], authenticates=True))
+        kinds = {f.kind for f in rep.findings}
+        self.assertIn("jwt-alg-none", kinds)
+        self.assertIn("jwt-no-exp", kinds)
+
+    def test_a_long_lifetime_defers_to_the_revocation_matrix(self):
+        """A two-year expiry is only a bearer problem if revocation is NOT server-side,
+        and this mode cannot see that. It says so rather than guessing."""
+        import base64, json as _j, secrets
+        from tpihunter.credentials import analyse
+        def seg(d): return base64.urlsafe_b64encode(_j.dumps(d).encode()).rstrip(b"=").decode()
+        iat = 1789880264
+        tok = (seg({"alg": "HS256"}) + "." +
+               seg({"sub": "a", "iat": iat, "exp": iat + 730*86400}) + "." +
+               secrets.token_urlsafe(32))
+        rep = analyse(self._samples([tok], authenticates=True))
+        self.assertEqual(rep.controls["lifetime_days"], 730.0)
+        self.assertTrue(any("revocation matrix" in n for n in rep.notes))
+        self.assertFalse([f for f in rep.findings if "lifetime" in f.kind])
+
+    def test_too_few_samples_claims_nothing(self):
+        from tpihunter.credentials import analyse
+        rep = analyse(self._samples(["abc123def456"], authenticates=True))
+        self.assertFalse(rep.controls["structure_measured"])
+        self.assertTrue(any("too few" in n for n in rep.notes))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
