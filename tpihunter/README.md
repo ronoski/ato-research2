@@ -290,6 +290,49 @@ never-valid   point_wallet    refused    401 invalid_token
 Scope enforcement is sound. The positive control (full scope obtains the field) and the
 negative (a never-valid bearer is refused) both fire, so the refusals mean something.
 
+## TPI-4 measured live: a password change revokes the session, not the token
+
+The sharper half of the pair, because a password change is *the* action a compromised
+user takes.
+
+> **TPI-4 (session-kill-on-credential-change).** A credential change or password reset
+> must invalidate every session and outstanding token whose provenance predates it.
+
+```
+witness      "A new password has been set."        (the page's own confirmation)
+controls     session works / token works before    (both positive)
+             never-issued bearer -> 401            (endpoint does authenticate)
+
+t+  5s   session 403   token 200
+t+ 20s   session 403   token 200
+t+ 40s   session 403   token 200
+t+ 70s   session 403   token 200
+t+110s   session 403   token 200
+t+170s   session 403   token 200
+```
+
+Revocation is prompt and **selective**: the session dies within five seconds, the OIDC
+access token keeps working for the rest of its ~900s life. Reproduced across two
+independent runs.
+
+**Why the polling matters.** The first run checked once, five seconds after the change.
+At that resolution "not revoked" and "not revoked *yet*" are the same observation, and
+only one of them is a finding. Polling to t+170s is what distinguishes a security property
+from a race — and the sibling check that was *supposed* to rule this out had silently
+loaded a different account's expired token, so its reassuring `401`s meant nothing.
+
+**Severity, stated honestly.** Bounded by the token lifetime (~15 minutes) and it requires
+the attacker to already hold a token, so this is not account takeover. What makes it worth
+reporting is the *false assurance*: the user changes their password, observes that they
+have been signed out everywhere — which is real, the session revocation works — and
+reasonably concludes they have evicted the intruder. They have not, for another quarter of
+an hour, across whatever the token's scopes reach (`user`, `pointWallet`, `user.birthday`,
+`user.mii`). The visible signal of containment and the actual extent of containment do not
+match.
+
+Together with the e-mail result above, the pattern is consistent: **this surface revokes
+sessions well and outstanding tokens not at all.**
+
 ## TPI-1 measured live: an e-mail rebind revokes nothing
 
 The clause this project is named for, finally exercised against a live target.
