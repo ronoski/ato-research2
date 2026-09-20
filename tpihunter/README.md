@@ -208,6 +208,8 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `mcp_server.py` | MCP server exposing those tools (lazy `mcp`; for the Claude Code agent) |
 | `matrix.py` | **revocation matrix** — single-principal lifecycle mode (does a mutation revoke a predating binding?) |
 | `report.py` | evidence bundles — each distinct bug as a submittable markdown/JSON report |
+| `browser.py` | **a UI flow as an ordinary adapter** — `BrowserAdapter`, `Flow`, `UiStep`, `Expect`. The browser is injected as a `PageDriver`, so the logic is tested without one |
+| `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
 | `validate.py` | `validate_target()` — prove the profile works before any verdict from it counts |
@@ -246,6 +248,40 @@ python3 -m tpihunter.live_demo
 starts the vulnerable mock on a loopback HTTP port, describes it with a `TargetProfile`,
 validates the description, and then runs the ordinary hunt against it — finding the same
 TPI-1 and TPI-4, with the same minimal repros, through sockets and cookies and JSON.
+
+### Driving a UI
+
+Some auth surface has no API you can drive — the flow is a rendered page, a modal, a
+wizard. `BrowserAdapter` makes such a flow an ordinary `TargetAdapter`, so
+`validate_target`, `AtoOracle` and `matrix.run_cell` apply to it exactly as they do to
+HTTP, and there is nothing left to hand-roll:
+
+```python
+adapter = BrowserAdapter(browser_profile, policy,
+                         driver_factory=playwright_driver_factory())
+```
+
+This exists because of measured failures, not tidiness. Every wrong answer this framework
+produced against a real target came from browser work that bypassed the framework: three
+logins recorded as successful while sitting on `/cdn/display_error`, and two `SURVIVED`
+verdicts on mutations that never happened. **Controls only protect the code paths that go
+through them.**
+
+Two rules are enforced by the schema rather than by discipline:
+
+* **`Expect` has no negative form.** It offers `url_contains`, `text_contains`, `cookie`
+  and `selector` — positive evidence. There is deliberately no `url_not_contains`: "we did
+  not land on the error page" passes on every page the author did not think of, and that
+  is exactly how those three logins were recorded as successful.
+* **A flow's final step must carry an `Expect`**, or the `Flow` is refused when it is
+  built. A flow that asserts nothing reports success whenever nothing raised, which is the
+  absence of a crash rather than a measurement.
+
+One `PageDriver` per principal, never shared — that is what makes the oracle's
+independence control mean anything. `present_binding` re-presents a captured session in a
+**fresh** context, never the one that minted it. Every `goto` is scope-checked against the
+engagement policy, so the UI path gets the same gate as the HTTP path. A browser profile
+is natural-canary only: `plant_marker` and `write_marker` refuse.
 
 ### When the tool may not log in
 

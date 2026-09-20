@@ -2092,5 +2092,176 @@ class TestMutationControl(unittest.TestCase):
         self.assertIn("unverified", v.mutation_verified)
 
 
+class _FakeDriver:
+    """A PageDriver with no browser: pages are (url -> text/cookies/selectors) data.
+    Lets the whole flow engine be tested without Playwright, which is why the driver is
+    injected at all."""
+
+    def __init__(self, pages, cookies_on=None):
+        self.pages = pages            # {url_substring: {"text":..., "sets":{cookie:val}, "sel":[...]}}
+        self._url = "about:blank"
+        self._cookies = dict(cookies_on or {})
+        self.filled = {}
+        self.clicked = []
+        self.closed = False
+
+    def _page(self):
+        for frag, page in self.pages.items():
+            if frag in self._url:
+                return page
+        return {"text": "", "sets": {}, "sel": []}
+
+    def goto(self, url):
+        self._url = url
+        self._cookies.update(self._page().get("sets", {}))
+
+    def url(self): return self._url
+    def text(self): return self._page().get("text", "")
+    def cookies(self): return dict(self._cookies)
+    def set_cookies(self, c): self._cookies.update(c)
+    def has(self, sel): return sel in self._page().get("sel", [])
+    def close(self): self.closed = True
+
+    def fill(self, sel, val):
+        if sel not in self._page().get("sel", []):
+            return False
+        self.filled[sel] = val
+        return True
+
+    def click(self, target):
+        page = self._page()
+        if target not in page.get("sel", []) and target not in page.get("labels", []):
+            return False
+        self.clicked.append(target)
+        goes = page.get("goes", {}).get(target)
+        if goes:
+            self.goto(goes)
+        return True
+
+
+class TestBrowserAdapter(unittest.TestCase):
+    """UI flows as an ordinary TargetAdapter, so the framework's controls reach them.
+    Every wrong answer this framework produced against a real target came from browser
+    work that bypassed those controls."""
+
+    BASE = "https://t.example"
+
+    def _policy(self, **kw):
+        from tpihunter.policy import EngagementPolicy
+        base = dict(name="t", authorized_by="x", identifiers=frozenset({"v@t.example"}),
+                    hosts=frozenset({"t.example"}))
+        base.update(kw)
+        return EngagementPolicy(**base)
+
+    def _profile(self, flows, **kw):
+        from tpihunter.browser import BrowserProfile
+        base = dict(name="t", base_url=self.BASE,
+                    accounts={"victim": {"email": "v@t.example", "password": "pw"},
+                              "attacker": {"email": "v@t.example", "password": "pw"}},
+                    flows=flows, session_cookie="sid",
+                    identity_from=r"id:([0-9a-f]{8})", marker_from=r"handle:([0-9a-f]{12})")
+        base.update(kw)
+        return BrowserProfile(**base)
+
+    LOGIN_OK = {"text": "id:aaaa1111 handle:0123456789ab Welcome", "sets": {"sid": "S-1"},
+                "sel": ["#email", "#pw"], "labels": ["Sign in"], "goes": {}}
+
+    def _login_flow(self, expect):
+        from tpihunter.browser import Flow, UiStep
+        return Flow("login", (
+            UiStep(goto="/login", fill=(("#email", "{email}"), ("#pw", "{password}")),
+                   click="Sign in", expect=expect),), proof=None)
+
+    def test_a_flow_that_lands_on_the_error_page_reports_failure(self):
+        # THE regression. Three logins in this engagement were recorded as successful
+        # while sitting on /cdn/display_error, because the check was "not on /login".
+        from tpihunter.browser import BrowserAdapter, Expect
+        pages = {"/login": {"text": "The request contains an error.", "sets": {},
+                            "sel": ["#email", "#pw"], "labels": ["Sign in"],
+                            "goes": {"Sign in": self.BASE + "/cdn/display_error"}},
+                 "/cdn/display_error": {"text": "The request contains an error.",
+                                        "sets": {}, "sel": [], "labels": []}}
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid"))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages))
+        obs = a.login(Principal("victim"))
+        self.assertFalse(obs.ok)
+        self.assertIn("cookie 'sid' absent", obs.note)
+
+    def test_a_flow_that_genuinely_succeeds_reports_success_with_identity(self):
+        from tpihunter.browser import BrowserAdapter, Expect
+        pages = {"/login": {**self.LOGIN_OK, "goes": {"Sign in": self.BASE + "/home"}},
+                 "/home": self.LOGIN_OK}
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid",
+                                                               text_contains="Welcome"))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages))
+        obs = a.login(Principal("victim"))
+        self.assertTrue(obs.ok)
+        self.assertEqual(a.whoami(Principal("victim")).identity, "aaaa1111")
+        self.assertEqual(a.read_marker(Principal("victim")).extracted["value"], "0123456789ab")
+
+    def test_each_principal_gets_its_own_context(self):
+        from tpihunter.browser import BrowserAdapter, Expect
+        pages = {"/login": {**self.LOGIN_OK, "goes": {"Sign in": self.BASE + "/home"}},
+                 "/home": self.LOGIN_OK}
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid"))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages))
+        v, at = Principal("victim"), Principal("attacker")
+        self.assertIsNot(a.driver(v), a.driver(at))
+        a.login(v)
+        self.assertIn("sid", a.driver(v).cookies())
+        self.assertNotIn("sid", a.driver(at).cookies())   # independence, the oracle's premise
+
+    def test_a_ui_step_leaving_scope_raises(self):
+        from tpihunter.browser import BrowserAdapter, Expect, Flow, UiStep
+        from tpihunter.policy import ScopeViolation
+        prof = self._profile({"login": Flow("login", (
+            UiStep(goto="https://elsewhere.example/login", expect=Expect(cookie="sid")),))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver({}))
+        with self.assertRaises(ScopeViolation):
+            a.login(Principal("victim"))
+
+    def test_present_binding_uses_a_fresh_context(self):
+        from tpihunter.browser import BrowserAdapter, Expect
+        made = []
+        def factory():
+            d = _FakeDriver({"t.example": {"text": "id:bbbb2222", "sets": {}, "sel": []}})
+            made.append(d); return d
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid"))})
+        a = BrowserAdapter(prof, self._policy(), factory)
+        obs = a.present_binding("S-1")
+        self.assertTrue(obs.ok)
+        self.assertEqual(obs.identity, "bbbb2222")
+        self.assertTrue(made[-1].closed)          # the throwaway context is disposed
+
+    def test_a_browser_profile_never_writes(self):
+        from tpihunter.browser import BrowserAdapter, Expect
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid"))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver({}))
+        p = Principal("victim")
+        self.assertFalse(a.plant_marker(p, "x").ok)
+        self.assertFalse(a.write_marker(p, "x").ok)
+        byref = a.read_marker(p, ref="anything")
+        self.assertFalse(byref.ok)
+        self.assertIn("no by-reference read", byref.note)
+
+    def test_missing_field_or_control_is_reported_not_silently_passed(self):
+        from tpihunter.browser import BrowserAdapter, Expect
+        pages = {"/login": {"text": "", "sets": {}, "sel": ["#email"], "labels": []}}
+        prof = self._profile({"login": self._login_flow(Expect(cookie="sid"))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver(pages))
+        obs = a.login(Principal("victim"))
+        self.assertFalse(obs.ok)
+        self.assertIn("'#pw' not found", obs.note)
+
+    def test_channel_control_is_enforced_before_a_request_is_made(self):
+        from tpihunter.browser import BrowserAdapter, Expect, Flow, UiStep
+        prof = self._profile({"sso_login": Flow("sso_login", (
+            UiStep(goto="/sso", expect=Expect(cookie="sid")),))})
+        a = BrowserAdapter(prof, self._policy(), lambda: _FakeDriver({}),
+                           control={"victim": {"v@t.example"}})
+        self.assertFalse(a.sso_login(Principal("attacker")).ok)   # attacker lacks control
+        self.assertIn("does not control", a.sso_login(Principal("attacker")).note)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

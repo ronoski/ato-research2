@@ -11,6 +11,7 @@ The pieces:
   harness      Plan/Step + run_plan: probes as data, executed with oracle checkpoints
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
+  browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
   profile      TargetProfile: a real target described as data, not code
   live         LiveAdapter: drives that profile over HTTP, scope enforced per request
   validate     validate_target(): prove the profile works before trusting a verdict
@@ -30,6 +31,8 @@ from .flaky import FlakyAdapter
 from .harness import Plan, Step, execute_action, run_plan
 from .matrix import (CellVerdict, MintSpec, MutationSpec, RevocationMatrix, Survival,
                      default_mints, default_mutations, run_cell)
+from .browser import (BrowserAdapter, BrowserProfile, Expect, Flow, PageDriver, UiStep,
+                      playwright_driver_factory)
 from .h1_scope import from_hackerone_csv, parse_instruction
 from .live import LiveAdapter, ScopedTransport, live_adapter
 from .policy import (AuditLog, BudgetExhausted, EngagementPolicy, GuardedAdapter,
@@ -61,6 +64,8 @@ __all__ = [
     "PolicyViolation", "ScopeViolation", "BudgetExhausted", "redact",
     "TargetProfile", "ProfileError", "LiveAdapter", "ScopedTransport", "live_adapter",
     "from_hackerone_csv", "parse_instruction",
+    "BrowserAdapter", "BrowserProfile", "Flow", "UiStep", "Expect", "PageDriver",
+    "playwright_driver_factory",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",
