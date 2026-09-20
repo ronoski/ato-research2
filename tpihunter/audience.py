@@ -64,10 +64,18 @@ class Audience:
 
 @dataclass
 class Presentation:
-    """What an audience did with a token. `subject` is the witness."""
+    """What an audience did with a token. `subject` is the witness.
+
+    `raw` is the response the subject was read out of. Supply it and the matrix checks
+    that the subject actually occurs there — because the witness control protects against
+    a lying endpoint, not against a presenter that fills the subject in from a local
+    variable. That is not hypothetical: it is how this mode reported its first
+    cross-audience finding, on an endpoint whose response contained no subject at all.
+    """
     acceptance: Acceptance
     subject: Optional[str] = None      # which principal the RS resolved it to
     evidence: str = ""
+    raw: Optional[str] = None          # the response text the subject came from
 
 
 # A structurally well-formed token that was never issued. Refusing it is the baseline
@@ -173,6 +181,16 @@ def run_audience_matrix(tokens: list, audiences: list,
                 # anonymous page, which is the easiest false critical in this whole mode.
                 acc = Acceptance.INCONCLUSIVE
                 p = Presentation(acc, None, (p.evidence + " | no subject witness").strip(" |"))
+            if (acc is Acceptance.ACCEPTED and p.subject and p.raw is not None
+                    and str(p.subject) not in p.raw):
+                # The presenter claimed a subject the response does not contain. Whatever
+                # it read, it did not read it here.
+                acc = Acceptance.INCONCLUSIVE
+                note = (f"'{aud.id}': a subject was reported that does not appear in the "
+                        f"response — the witness was supplied, not observed")
+                if note not in res.withheld:
+                    res.withheld.append(note)
+                p = Presentation(acc, None, (p.evidence + " | unwitnessed subject").strip(" |"))
             res.cells.append(Cell(tok, aud, acc, p.subject, p.evidence))
 
     # -- verdicts ------------------------------------------------------------------

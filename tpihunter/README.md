@@ -215,6 +215,26 @@ The positive control is what stops the mode lying. On the first live run the tok
 refused at every audience including its own, and the matrix returned no verdict rather
 than reporting perfect pinning.
 
+Then the mode reported a TPI-2 finding that was **mine, not the target's**. The presenter
+mapped one endpoint's `404 no shop account` to ACCEPTED and filled the subject in from a
+local variable — on a response that named nobody at all. The witness control protects
+against a lying endpoint; nothing protected against a lying caller. So `Presentation` now
+carries `raw`, the response the subject was read out of, and a subject that does not occur
+there downgrades the cell to inconclusive with a note. Corrected, that finding disappeared
+and the real result came out:
+
+```
+token         presented to                 result         subject
+access_token  e56201e414c97a10/token       accepted       d0f0e3efa65ac9fa
+access_token *e56201e414c97a10/id_token    inconclusive   -
+id_token     *e56201e414c97a10/token       refused        -
+```
+
+`api.accounts.nintendo.com` refuses an `id_token` presented as a bearer credential — the
+dangerous direction of type confusion, and it is closed. The inconclusive cells are a
+*testability* limit, not a clean bill: that endpoint cannot witness a subject for an
+account with no shop record, so nothing it returns can be judged.
+
 ## The step-up matrix (the sixth mode)
 
 > Sibling to `stepup.py` (M17), which models TPI-6 *inside the state machine* — partial

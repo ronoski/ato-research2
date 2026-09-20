@@ -3063,6 +3063,42 @@ class TestAudienceMatrix(unittest.TestCase):
         r = run_audience_matrix([self._t()], self._auds("clientA"), present)
         self.assertTrue(any(f.clause_id == "AUDIENCE-1" for f in r.findings))
 
+    def test_a_subject_absent_from_the_response_is_not_a_witness(self):
+        """How this mode reported its first live cross-audience finding: the presenter
+        filled the subject in from a local variable, on an endpoint whose response
+        contained no subject at all. The control guards against a lying endpoint; this
+        guards against a lying caller."""
+        from tpihunter.audience import (Acceptance, NEVER_ISSUED, Presentation,
+                                        run_audience_matrix)
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401", raw="denied")
+            if aud.id == "clientA":
+                return Presentation(Acceptance.ACCEPTED, "user-1", "200",
+                                    raw='{"id":"user-1"}')
+            # accepted, but the response never names anyone
+            return Presentation(Acceptance.ACCEPTED, "user-1", "404 no record",
+                                raw='{"errors":[{"status":404}]}')
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                present, check_tamper=False)
+        self.assertEqual([f for f in r.findings if f.clause_id == "TPI-2"], [])
+        self.assertTrue(any("supplied, not observed" in w for w in r.withheld))
+        cell = [c for c in r.cells if c.audience.id == "clientB"][0]
+        self.assertIs(cell.acceptance, Acceptance.INCONCLUSIVE)
+
+    def test_a_witnessed_subject_still_produces_the_finding(self):
+        """The hardening must not smother a real cross-audience acceptance."""
+        from tpihunter.audience import (Acceptance, NEVER_ISSUED, Presentation,
+                                        run_audience_matrix)
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401", raw="denied")
+            return Presentation(Acceptance.ACCEPTED, "user-1", "200",
+                                raw='{"naId":"user-1"}')
+        r = run_audience_matrix([self._t()], self._auds("clientA", "clientB"),
+                                present, check_tamper=False)
+        self.assertEqual(len([f for f in r.findings if f.clause_id == "TPI-2"]), 1)
+
     def test_tamper_changes_only_the_signature(self):
         from tpihunter.audience import tamper
         t = "aaa.bbb.ccc"
