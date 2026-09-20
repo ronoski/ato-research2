@@ -599,11 +599,25 @@ is natural-canary only: `plant_marker` and `write_marker` refuse.
 
 ### When the tool may not log in
 
-Real consumer auth is gated — a CAPTCHA, a device check, a push approval — and defeating
-any of those is a hard stop on every programme worth testing. Verified on a live in-scope
-target: the Nintendo account login form is a reCAPTCHA Enterprise component
-(`canSubmit` requires `isRecaptchaEnterpriseReady`; submit calls
-`grecaptchaEnterpriseChallenge()`), behind Akamai bot manager.
+Real consumer auth is gated — a bot manager, a device check, a push approval — and
+defeating any of those is a hard stop on every programme worth testing.
+
+Measured on a live in-scope target (`accounts.nintendo.com`), correcting an earlier claim
+in this file that the login form was a reCAPTCHA Enterprise component. It is not. Probed
+in-page: `grecaptcha: false`, `grecaptcha.enterprise: false`, no hCaptcha, no Turnstile, no
+PerimeterX, no DataDome. What is actually in front of it is **Akamai Bot Manager**:
+`_abck` / `ak_bmsc` / `bm_sz` cookies on `.nintendo.com`, `x-akamai-transformed` on the
+document, and a `POST /akam/13/pixel_*` beacon on page load. The automation also
+advertises itself — `navigator.webdriver: true` — which is a primary input to exactly that
+product.
+
+The distinction matters for what a session may do. There is no puzzle to solve, so the
+temptation is not "solve the CAPTCHA" but "look less automated" — patch `navigator.webdriver`,
+forge `sensor_data`, present a different source IP. All three are bot-detection evasion and
+all three are hard stops, including when the other IP belongs to us. Note also what this
+kind of block is *not*: the same tooling registered several accounts on earlier dates, so
+it is a risk score raised by volume, not a capability wall. Back off, or get a session from
+a human browser.
 
 So the framework does not authenticate. A human logs in in a real browser and hands the
 credential over:
