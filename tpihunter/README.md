@@ -236,9 +236,18 @@ acceptance and "HTTP 403" is not refusal:
   there, or "it accepted my token" is unfalsifiable.
 * **Positive control.** The token must be accepted at its *own* audience. A token refused
   everywhere looks like perfect pinning and proves nothing — it may just be expired.
-* **Tamper.** A copy with one byte flipped in the signature must be refused. An audience
-  that takes it is not checking signatures at all, reported as `AUDIENCE-1` rather than
-  folded into an aud finding, because it subsumes the question.
+* **Tamper.** A copy with a bit flipped in the **decoded** signature must be refused. An
+  audience that takes it is not checking signatures at all, reported as `AUDIENCE-1`
+  rather than folded into an aud finding, because it subsumes the question.
+
+  The obvious implementation of this control is wrong, and wrong in the direction that
+  manufactures a critical. Flipping the last *character* of the base64url signature does
+  not reliably change the signature: a 2048-bit RSA signature encodes to 342 characters
+  carrying 2052 bits, so the final character's low 4 bits are discarded on decode, and
+  `...A` and `...B` decode byte-identically. Live, that made a correct verifier look like
+  one that ignores signatures entirely. `tamper()` now flips a bit in a middle byte of the
+  decoded signature and **raises `TamperFailed`** rather than ever returning a no-op
+  control; the matrix turns that into a withheld note, never an accusation.
 
 Run live against Nintendo's federation surface, the controls are what produced the result.
 An idToken (`aud=e56201e414c97a10`, `sub` = the account, 900s life) was presented to the

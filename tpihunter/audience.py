@@ -35,6 +35,8 @@ testable offline and the same code runs against a mock and a live estate.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
@@ -85,14 +87,47 @@ NEVER_ISSUED = ("eyJhbGciOiJSUzI1NiIsImtpZCI6Il9fbmV2ZXJfaXNzdWVkX18ifQ"
                 ".__never_issued_signature__")
 
 
+def _b64url_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _b64url_encode(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+class TamperFailed(RuntimeError):
+    """The signature could not be altered, so the tamper control cannot be trusted."""
+
+
 def tamper(token_value: str) -> str:
-    """Flip one character of the signature, leaving header and claims byte-identical."""
+    """Flip a bit in the DECODED signature, leaving header and claims byte-identical.
+
+    The obvious implementation — change the last character of the signature — is wrong,
+    and wrong in the direction that manufactures a critical finding. A 2048-bit RSA
+    signature base64url-encodes to 342 characters, which carry 2052 bits: the final
+    character's low 4 bits are discarded on decode. So `...A` and `...B` decode to
+    byte-identical signatures, the verifier correctly accepts the "tampered" token, and
+    AUDIENCE-1 fires against a perfectly sound implementation. That happened live.
+
+    Flipping a bit in a middle byte of the decoded signature always changes it.
+    """
     parts = token_value.split(".")
     if len(parts) != 3 or not parts[2]:
-        return token_value + "x"
-    sig = parts[2]
-    flipped = ("B" if sig[-1] != "B" else "C")
-    return ".".join([parts[0], parts[1], sig[:-1] + flipped])
+        # A control that cannot alter the signature must not be silently substituted for
+        # one that can: the caller would read the resulting acceptance as "not verified".
+        raise TamperFailed("token has no signature segment to tamper with")
+    try:
+        raw = _b64url_decode(parts[2])
+    except (ValueError, binascii.Error) as exc:
+        raise TamperFailed(f"signature is not base64url: {exc}") from exc
+    if not raw:
+        raise TamperFailed("signature decodes to zero bytes")
+    b = bytearray(raw)
+    b[len(b) // 2] ^= 0x01
+    out = ".".join([parts[0], parts[1], _b64url_encode(bytes(b))])
+    if _b64url_decode(out.split(".")[2]) == raw:      # never return a no-op control
+        raise TamperFailed("signature bytes unchanged after tampering")
+    return out
 
 
 @dataclass
@@ -223,7 +258,14 @@ def run_audience_matrix(tokens: list, audiences: list,
             if not takes:
                 continue
             t = takes[0].token
-            p = _present(Token(t.id + "+tampered", tamper(t.value), t.aud, t.subject), aud)
+            try:
+                forged = tamper(t.value)
+            except TamperFailed as exc:
+                res.withheld.append(
+                    f"'{aud.id}': the tamper control could not be built for '{t.id}' "
+                    f"({exc}) — signature verification is untested here")
+                continue
+            p = _present(Token(t.id + "+tampered", forged, t.aud, t.subject), aud)
             if p.acceptance is Acceptance.ACCEPTED:
                 res.findings.append(Finding(
                     "AUDIENCE-1", "signature not verified",

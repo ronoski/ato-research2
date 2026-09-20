@@ -3106,6 +3106,44 @@ class TestAudienceMatrix(unittest.TestCase):
         self.assertEqual(out.split(".")[:2], ["aaa", "bbb"])
         self.assertNotEqual(out.split(".")[2], "ccc")
 
+    def test_tamper_changes_the_DECODED_signature_bytes(self):
+        """The bug that produced a false critical against a sound verifier. A 2048-bit
+        signature is 342 base64url chars carrying 2052 bits, so the last character's low
+        4 bits are discarded: '...A' and '...B' decode identically. Flipping the last
+        character is therefore a no-op control that AUDIENCE-1 reads as 'not verified'."""
+        import base64
+        from tpihunter.audience import tamper
+        def dec(tok):
+            s = tok.split(".")[2]
+            return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+        for nbytes in (256, 384, 512, 64, 32):
+            sig = base64.urlsafe_b64encode(bytes(range(1, 1 + nbytes % 251)) *
+                                           (nbytes // max(1, nbytes % 251) + 1))[:0] or None
+            raw = bytes((i * 7 + 3) % 256 for i in range(nbytes))
+            tok = "aaa.bbb." + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+            self.assertNotEqual(dec(tamper(tok)), raw, f"{nbytes}-byte signature unchanged")
+
+    def test_tamper_refuses_rather_than_returning_a_no_op_control(self):
+        """A control that cannot alter the signature must raise, never silently stand in
+        for one that can — the acceptance would be read as 'signature not verified'."""
+        from tpihunter.audience import TamperFailed, tamper
+        for bad in ("aaa.bbb.", "aaa.bbb", "notajwt"):
+            with self.assertRaises(TamperFailed, msg=bad):
+                tamper(bad)
+
+    def test_an_untamperable_token_withholds_rather_than_accusing(self):
+        from tpihunter.audience import (Acceptance, NEVER_ISSUED, Presentation, Token,
+                                        run_audience_matrix)
+        from tpihunter.audience import Audience
+        def present(tok, aud):
+            if tok.value == NEVER_ISSUED:
+                return Presentation(Acceptance.REFUSED, None, "401", raw="no")
+            return Presentation(Acceptance.ACCEPTED, "user-1", "200", raw='{"id":"user-1"}')
+        t = Token("opaque", "not-a-jwt-at-all", "clientA", "user-1")
+        r = run_audience_matrix([t], [Audience("clientA")], present)
+        self.assertFalse(any(f.clause_id == "AUDIENCE-1" for f in r.findings))
+        self.assertTrue(any("tamper control could not be built" in w for w in r.withheld))
+
 
 class TestScopeMatrix(unittest.TestCase):
     """Consent as a provenance level. The field witness is the whole mode: two weaker
