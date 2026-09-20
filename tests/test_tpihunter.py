@@ -14,6 +14,7 @@ from __future__ import annotations
 import unittest
 
 import json
+import time
 
 from tpihunter.agent import AgentHunter, EnumeratorStrategist, HuntState, LLMStrategist
 from tpihunter.dedup import build_plan, deduplicate
@@ -2749,6 +2750,108 @@ class TestSurfaceTriage(unittest.TestCase):
         catchall_baseline("https://h", lambda u: seen.append(u) or _R())
         catchall_baseline("https://h", lambda u: seen.append(u) or _R())
         self.assertNotEqual(seen[0], seen[1])
+
+
+class TestSessionLifecycle(unittest.TestCase):
+    """Sessions as scarce, degrading inventory — the constraint that ended the first live
+    engagement. Sixteen scripts each minted their own login, eight sessions were captured
+    and discarded when their browser closed, and by evening every account answered the
+    login form with an error page, including one rested seven hours."""
+
+    def _store(self, **kw):
+        import tempfile, os
+        from tpihunter.sessions import SessionStore
+        path = os.path.join(tempfile.mkdtemp(), "s.json")
+        return SessionStore(path, **kw), path
+
+    def _login(self, counter):
+        from tpihunter.sessions import Session
+        def fn():
+            counter["n"] += 1
+            return Session("victim", cookies={"sid": f"S{counter['n']}"})
+        return fn
+
+    def test_a_live_session_is_reused_instead_of_reminted(self):
+        st, _ = self._store(validate=lambda s: True)
+        c = {"n": 0}
+        for _ in range(6):
+            st.acquire("victim", login=self._login(c))
+        self.assertEqual(c["n"], 1)      # six acquires, ONE authentication
+
+    def test_a_dead_session_is_discarded_and_not_kept_around(self):
+        st, _ = self._store(validate=lambda s: False)
+        c = {"n": 0}
+        st.acquire("victim", login=self._login(c))
+        st.acquire("victim", login=self._login(c))
+        self.assertEqual(c["n"], 2)
+        self.assertEqual(st.ledger.spent("victim"), 2)
+
+    def test_sessions_and_the_ledger_survive_a_new_process(self):
+        from tpihunter.sessions import SessionStore
+        st, path = self._store(validate=lambda s: True)
+        c = {"n": 0}
+        st.acquire("victim", login=self._login(c))
+        reopened = SessionStore(path, validate=lambda s: True)
+        reopened.acquire("victim", login=self._login(c))
+        self.assertEqual(c["n"], 1)      # the new process reused it — no login at all
+        self.assertEqual(reopened.ledger.total(), 1)
+
+    def test_the_per_principal_cap_refuses_rather_than_continuing(self):
+        from tpihunter.sessions import LoginLedger, NoSessionAvailable
+        st, _ = self._store(validate=lambda s: False,
+                            ledger=LoginLedger(max_per_principal=2, max_total=99))
+        c = {"n": 0}
+        st.acquire("victim", login=self._login(c))
+        st.acquire("victim", login=self._login(c))
+        with self.assertRaises(NoSessionAvailable) as cm:
+            st.acquire("victim", login=self._login(c))
+        self.assertIn("already spent", str(cm.exception))
+        self.assertEqual(c["n"], 2)
+
+    def test_two_failed_logins_stop_the_retry_loop(self):
+        """The behaviour that matters most: on a real target a failed login and a
+        throttled one return the same error page, so retrying is what deepens it."""
+        from tpihunter.sessions import LoginLedger, NoSessionAvailable
+        st, _ = self._store(validate=lambda s: False,
+                            ledger=LoginLedger(max_per_principal=9, max_total=99))
+        for _ in range(2):
+            with self.assertRaises(NoSessionAvailable):
+                st.acquire("victim", login=lambda: None)
+        with self.assertRaises(NoSessionAvailable) as cm:
+            st.acquire("victim", login=lambda: None)
+        self.assertIn("retrying is what deepens it", str(cm.exception))
+
+    def test_an_unverifiable_session_expires_instead_of_being_trusted_forever(self):
+        """With no validator there is no evidence, so age has to decide. Handing back a
+        dead cookie would turn every downstream verdict into an INCONCLUSIVE wearing a
+        result's clothes."""
+        from tpihunter.sessions import Session
+        st, _ = self._store(validate=None, max_age=1800.0)
+        stale = Session("victim", cookies={"sid": "old"})
+        st.put("victim", stale)
+        stale.acquired_at = time.time() - 7200          # the seven-hour rest that did not help
+        c = {"n": 0}
+        got = st.acquire("victim", login=self._login(c))
+        self.assertEqual(c["n"], 1)                     # re-minted, not trusted
+        self.assertEqual(got.cookies["sid"], "S1")
+
+    def test_a_session_supplied_out_of_band_costs_nothing(self):
+        from tpihunter.sessions import Session
+        st, _ = self._store(validate=lambda s: True)
+        st.put("victim", Session("victim", cookies={"sid": "from-a-human-browser"}))
+        c = {"n": 0}
+        got = st.acquire("victim", login=self._login(c))
+        self.assertEqual(c["n"], 0)
+        self.assertEqual(got.cookies["sid"], "from-a-human-browser")
+        self.assertEqual(st.ledger.total(), 0)
+
+    def test_status_makes_exhaustion_visible_while_it_is_recoverable(self):
+        st, _ = self._store(validate=lambda s: True)
+        c = {"n": 0}
+        st.acquire("victim", login=self._login(c))
+        out = st.status()
+        self.assertIn("victim", out)
+        self.assertIn("total spent: 1", out)
 
 
 if __name__ == "__main__":

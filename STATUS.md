@@ -15,10 +15,10 @@ a **strategy**. The mechanical enumerator is just the *baseline* strategist — 
 target is an LLM strategist that adapts. Judge every task by: *does it move us toward a
 live agent driving the loop?*
 
-**Baseline (last verified green): 2026-09-16.** Test suite + twelve self-tests pass:
-`python3 -m unittest discover` (62 tests), and `python3 -m tpihunter.{demo,enum_demo,
+**Baseline (last verified green): 2026-09-20.** Test suite + twelve self-tests pass:
+`python3 -m unittest discover` (223 tests), and `python3 -m tpihunter.{demo,enum_demo,
 learn_demo,synth_demo,agent_demo,live_agent_demo,newaction_demo,report_demo,matrix_demo,
-retry_demo,alias_demo,coverage_demo}` (the live one is gated behind `TPIHUNTER_LIVE=1`). MCP
+retry_demo,alias_demo,coverage_demo,live_demo}` (all twelve verified this run). MCP
 server for the Claude Code agent: `python3 -m tpihunter.mcp_server` (needs `mcp`).
 
 ---

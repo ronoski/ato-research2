@@ -19,7 +19,7 @@ This repo has two halves:
 ## Quickstart
 
 ```bash
-python3 -m unittest discover     # regression suite (215 tests, stdlib only)
+python3 -m unittest discover     # regression suite (223 tests, stdlib only)
 python3 -m tpihunter.demo        # the oracle: TAKEOVER on a vulnerable target, SAFE on the patched one
 python3 -m tpihunter.enum_demo   # the enumerator: generates probes → dedups to 2 distinct bugs
 python3 -m tpihunter.learn_demo  # automata learning: L* + W-method oracle recovers & certifies the auth FSM
@@ -84,6 +84,15 @@ file does not authorize is refused before a request is sent, and every URL — i
 every redirect — is re-checked against the policy. See
 [`tpihunter/README.md`](tpihunter/README.md#hunting-a-real-target), or run
 `python3 -m tpihunter.live_demo` to watch the whole thing against a loopback server.
+
+### Sessions are inventory
+
+Logging in is the scarcest thing a live hunt does — each one spends a mailbox code and
+raises a risk score that does not reset — and its failure is silent, since a throttled
+login and a wrong password return the same page. `SessionStore` reuses a validated
+session before minting one, caps the spend per principal and per engagement, and refuses
+after two consecutive failures instead of deepening the throttle. See
+[`tpihunter/README.md`](tpihunter/README.md#sessions-are-inventory-not-a-function-call).
 
 ## Working on this project?
 

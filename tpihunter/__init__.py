@@ -12,6 +12,7 @@ The pieces:
   mock_target  a deliberately vulnerable in-memory target + its adapter
   probes       hand-written TPI probe plans
   browser      BrowserAdapter: a UI flow as an ordinary TargetAdapter (driver injected)
+  sessions     sessions as scarce inventory — reuse before you spend, and a login budget
   surface      surface triage — which in-scope asset to point the modes at, and why
   credentials  credential structure/entropy — the handle TPI treats as an atom
   race         concurrency: the same action fired N times at once, with overlap measured
@@ -43,6 +44,7 @@ from .identifiers import Finding as IdentifierFinding
 from .identifiers import Variant, probe_identifier, variants
 from .probe import Budget, Candidate, Halted, ProbeResult, run_probe
 from .credentials import CredentialSample, Shape, analyse, decode_jwt
+from .sessions import LoginLedger, NoSessionAvailable, Session, SessionStore
 from .surface import Baseline, Surface, catchall_baseline, render_table, triage
 from .race import RaceOutcome, RaceSpec, RaceVerdict, max_overlap, run_race
 from .live import LiveAdapter, ScopedTransport, live_adapter
@@ -82,6 +84,7 @@ __all__ = [
     "RaceSpec", "RaceVerdict", "RaceOutcome", "run_race", "max_overlap",
     "CredentialSample", "Shape", "analyse", "decode_jwt",
     "Surface", "Baseline", "triage", "catchall_baseline", "render_table",
+    "SessionStore", "Session", "LoginLedger", "NoSessionAvailable",
     "validate_target", "Validation", "Check",
     "CLAUSES", "CATALOG", "BROAD_AUTHORIZATION", "FailureMode",
     "Plan", "Step", "run_plan",

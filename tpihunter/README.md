@@ -338,6 +338,7 @@ account takeover (the shape of Grab T-ATO-22, Critical).
 | `identifiers.py` | **outside the state machine** — identifier-equivalence probing: two layers disagreeing about whether two strings are one identity |
 | `probe.py` | bounded, hypothesis-led enumeration; a candidate without a stated hypothesis cannot be constructed |
 | `browser.py` | **a UI flow as an ordinary adapter** — `BrowserAdapter`, `Flow`, `UiStep`, `Expect`. The browser is injected as a `PageDriver`, so the logic is tested without one |
+| `sessions.py` | **sessions as scarce inventory** — `SessionStore` reuses a live session before minting one, `LoginLedger` caps the spend and refuses after repeated failures |
 | `playwright_driver.py` | the `PageDriver` Playwright backs (lazy import) |
 | `profile.py` | **a target described as data** — `TargetProfile`: endpoints, extraction, accounts. What an agent authors instead of writing an adapter |
 | `live.py` | `LiveAdapter` + `ScopedTransport` — drives a profile over HTTP, one transport per principal, every URL and redirect checked against the policy |
@@ -434,6 +435,44 @@ credential resolves to an identity instead of logging in, and blocks with a name
 none was supplied. `login`/`register` steps for such a principal are satisfied without a
 request, and the trace says so, because a probe whose `register` did not actually register
 means something different.
+
+### Sessions are inventory, not a function call
+
+The first live engagement did not end because the target was clean or the methodology was
+thin. It ended because **no session could be obtained any more**. Sixteen scripts each
+minted their own login, eight sessions were captured and thrown away when their browser
+closed, and about a dozen authentications ran through one account estate in a day. By
+evening every account answered the login form with an error page — including one rested
+for seven hours.
+
+Almost every one of those logins was re-establishing a session that already existed and
+was still valid. A session is not free and not renewable on demand: each authentication
+spends a one-time code from a real mailbox, raises a behavioural risk score that does not
+reset when you stop, and dies wholesale on any credential change. Worst of all the failure
+is **silent** — a throttled login returns the same error page as a wrong password, so "I
+could not log in" never distinguishes exhaustion from a bad credential.
+
+```python
+store = SessionStore(path, validate=is_still_live)
+s = store.acquire("victim", login=do_browser_login)   # reuses if it can
+store.put("attacker", captured_by_a_human)            # the path that costs nothing
+```
+
+`acquire()` validates what it holds and returns it; only a genuinely dead session is
+re-minted, and only against a budget. The ledger persists across processes, so a second
+script does not repeat the first one's spend. Three refusals, each raising
+`NoSessionAvailable` rather than trying:
+
+* **per-principal cap** (default 4) and **engagement cap** (default 12) — stop while the
+  estate is still usable;
+* **two consecutive failures** — on a real target that reads as throttling, and retrying
+  is what deepens it;
+* **no validator and a stale session** — with no evidence, age decides. Handing a dead
+  cookie downstream turns every verdict after it into an `INCONCLUSIVE` wearing a result's
+  clothes, which is the failure this whole module exists to prevent.
+
+Pairs with the section above: when the tool may not authenticate at all, `put()` is how a
+human-captured credential enters, and it costs nothing against the budget.
 
 ### Getting the scope right
 
